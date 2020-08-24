@@ -384,8 +384,12 @@ where
                         continue;
                     };
 
+                    // Make sure we get the same tips, regardless of the
+                    // order of peer responses
                     if !download_set.contains(&new_tip.expected_next) {
-                        tracing::debug!(?new_tip, "adding new prospective tip");
+                        tracing::debug!(?new_tip, "adding new prospective tip, and removing existing tips in unknown hashes");
+                        self.prospective_tips
+                            .retain(|t| !unknown_hashes.contains(&t.expected_next));
                         self.prospective_tips.insert(new_tip);
                     } else {
                         tracing::debug!(
@@ -472,6 +476,8 @@ where
                             }
                         };
 
+                        // TODO: refactor common code out of obtain and extend tips ???
+
                         // We use the last hash for the tip, and we want to avoid
                         // bad tips. So we discard the last hash. (We don't need
                         // to worry about missed downloads, because we will pick
@@ -493,8 +499,12 @@ where
 
                         tracing::trace!(?unknown_hashes);
 
+                        // Make sure we get the same tips, regardless of the
+                        // order of peer responses
                         if !download_set.contains(&new_tip.expected_next) {
-                            tracing::debug!(?new_tip, "adding new prospective tip");
+                            tracing::debug!(?new_tip, "adding new prospective tip, and removing existing tips in unknown hashes");
+                            self.prospective_tips
+                                .retain(|t| !unknown_hashes.contains(&t.expected_next));
                             self.prospective_tips.insert(new_tip);
                         } else {
                             tracing::debug!(
