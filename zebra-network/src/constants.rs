@@ -27,7 +27,8 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(4);
 /// This avoids explicit synchronization, but relies on the peer
 /// connector actually setting up channels and these heartbeats in a
 /// specific manner that matches up with this math.
-pub const LIVE_PEER_DURATION: Duration = Duration::from_secs(60 + 10 + 10 + 10);
+pub const LIVE_PEER_DURATION: Duration =
+    Duration::from_secs(HEARTBEAT_INTERVAL.as_secs() + REQUEST_TIMEOUT.as_secs() * 3);
 
 /// Regular interval for sending keepalive `Ping` messages to each
 /// connected peer.
@@ -93,6 +94,9 @@ mod tests {
         let constructed_live_peer_duration =
             HEARTBEAT_INTERVAL + REQUEST_TIMEOUT + REQUEST_TIMEOUT + REQUEST_TIMEOUT;
 
+        // The live peer duration is constructed by adding the `seconds` values
+        // of these constants. So we need to check for sub-second differences,
+        // and other bugs.
         assert_eq!(LIVE_PEER_DURATION, constructed_live_peer_duration);
     }
 }
