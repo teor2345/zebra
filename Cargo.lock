@@ -3206,6 +3206,7 @@ dependencies = [
  "futures",
  "hex",
  "lazy_static",
+ "metrics",
  "once_cell",
  "serde",
  "sled",

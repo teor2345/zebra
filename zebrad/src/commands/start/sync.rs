@@ -1,6 +1,6 @@
 use std::{collections::HashSet, iter, pin::Pin, sync::Arc, time::Duration};
 
-use color_eyre::eyre::{eyre, Report};
+use color_eyre::eyre::{eyre, Report, WrapErr};
 use futures::future::FutureExt;
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::{task::JoinHandle, time::delay_for};
@@ -16,20 +16,80 @@ use zebra_consensus::parameters;
 use zebra_network::{self as zn, RetryLimit};
 use zebra_state as zs;
 
+/// Controls the number of peers used for each ObtainTips and ExtendTips request.
 // XXX in the future, we may not be able to access the checkpoint module.
 const FANOUT: usize = checkpoint::MAX_QUEUED_BLOCKS_PER_HEIGHT;
+/// Controls how many times we will retry each block download.
+///
+/// If all the retries fail, then the syncer will reset, and start downloading
+/// blocks from the verified tip in the state, including blocks which previously
+/// downloaded successfully.
+///
+/// But if a node is on a slow or unreliable network, sync restarts can result
+/// in a flood of download requests, making future syncs more likely to fail.
+/// So it's much faster to retry each block multiple times.
+///
+/// When we implement a peer reputation system, we can reduce the number of
+/// retries, because we will be more likely to choose a good peer.
+const BLOCK_DOWNLOAD_RETRY_LIMIT: usize = 5;
+
 /// Controls how far ahead of the chain tip the syncer tries to download before
 /// waiting for queued verifications to complete. Set to twice the maximum
 /// checkpoint distance.
+///
+/// Some checkpoints contain larger blocks, so the maximum checkpoint gap can
+/// represent multiple gigabytes of data.
 const LOOKAHEAD_LIMIT: usize = checkpoint::MAX_CHECKPOINT_HEIGHT_GAP * 2;
+
+/// Controls how long we wait for a tips response to return.
+///
+/// The network layer also imposes a timeout on requests.
+const TIPS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(6);
 /// Controls how long we wait for a block download request to complete.
-const BLOCK_TIMEOUT: Duration = Duration::from_secs(6);
+///
+/// The network layer also imposes a timeout on requests.
+const BLOCK_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The maximum amount of time that Zebra should take to download a checkpoint
+/// full of blocks. Based on the current `MAX_CHECKPOINT_BYTE_SIZE`.
+///
+/// We assume that Zebra nodes have at least 10 Mbps bandwidth, and allow some
+/// extra time for request latency.
+const MAX_CHECKPOINT_DOWNLOAD_SECONDS: u64 = 300;
+
+/// Controls how long we wait for a block verify task to complete.
+///
+/// This timeout makes sure that the syncer and verifiers do not deadlock.
+/// When the `LOOKAHEAD_LIMIT` is reached, the syncer waits for blocks to verify
+/// (or fail). If the verifiers are also waiting for more blocks from the syncer,
+/// then without a timeout, Zebra would deadlock.
+const BLOCK_VERIFY_TIMEOUT: Duration = Duration::from_secs(MAX_CHECKPOINT_DOWNLOAD_SECONDS);
+
+/// Controls how long we wait to retry ObtainTips or ExtendTips after they fail.
+///
+/// This timeout should be long enough to allow some of our peers to clear
+/// their connection state. See `SYNC_RESTART_TIMEOUT` for details.
+const TIPS_RETRY_TIMEOUT: Duration = Duration::from_secs(zn::LIVE_PEER_DURATION.as_secs() / 2);
 /// Controls how long we wait to restart syncing after finishing a sync run.
-const SYNC_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
+///
+/// This timeout should be long enough to:
+///   - allow pending downloads and verifies to complete or time out.
+///     Sync restarts don't cancel downloads, so quick restarts can overload
+///     network-bound nodes, leading to further failures.
+///   - allow zcashd peers to process pending requests. If the node only has a
+///     few peers, we want to clear as much peer state as possible. In
+///     particular, zcashd sends "next block range" hints, based on zcashd's
+///     internal model of our sync progress. But we want to discard these hints,
+///     so they don't get confused with ObtainTips and ExtendTips responses.
+///
+/// Make sure each sync run can download an entire checkpoint, even on instances
+/// with slow or unreliable networks. This is particularly important on testnet,
+/// which has a small number of slow peers.
+const SYNC_RESTART_TIMEOUT: Duration = Duration::from_secs(zn::LIVE_PEER_DURATION.as_secs() / 2);
 
 /// Helps work around defects in the bitcoin protocol by checking whether
 /// the returned hashes actually extend a chain tip.
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct CheckedTip {
     tip: block::Hash,
     expected_next: block::Hash,
@@ -45,12 +105,13 @@ where
     ZV: Service<Arc<Block>, Response = block::Hash, Error = Error> + Send + Clone + 'static,
     ZV::Future: Send,
 {
-    /// Used to perform extendtips requests, with no retry logic (failover is handled using fanout).
-    tip_network: ZN,
+    /// Used to perform ObtainTips and ExtendTips requests, with no retry logic
+    /// (failover is handled using fanout).
+    tip_network: Timeout<ZN>,
     /// Used to download blocks, with retry logic.
     block_network: Retry<RetryLimit, Timeout<ZN>>,
     state: ZS,
-    verifier: ZV,
+    verifier: Timeout<ZV>,
     prospective_tips: HashSet<CheckedTip>,
     pending_blocks: Pin<Box<FuturesUnordered<JoinHandle<Result<block::Hash, Error>>>>>,
     genesis_hash: block::Hash,
@@ -71,12 +132,14 @@ where
     ///  - state: the zebra-state that stores the chain
     ///  - verifier: the zebra-consensus verifier that checks the chain
     pub fn new(chain: Network, peers: ZN, state: ZS, verifier: ZV) -> Self {
+        let tip_network = Timeout::new(peers.clone(), TIPS_RESPONSE_TIMEOUT);
         let block_network = ServiceBuilder::new()
-            .retry(RetryLimit::new(3))
-            .timeout(BLOCK_TIMEOUT)
-            .service(peers.clone());
+            .retry(RetryLimit::new(BLOCK_DOWNLOAD_RETRY_LIMIT))
+            .timeout(BLOCK_DOWNLOAD_TIMEOUT)
+            .service(peers);
+        let verifier = Timeout::new(verifier, BLOCK_VERIFY_TIMEOUT);
         Self {
-            tip_network: peers,
+            tip_network,
             block_network,
             state,
             verifier,
@@ -93,66 +156,122 @@ where
         self.request_genesis().await?;
 
         'sync: loop {
+            // Update metrics for any ready tasks, before wiping state
+            while let Some(Some(rsp)) = self.pending_blocks.next().now_or_never() {
+                match rsp.expect("block download and verify tasks should not panic") {
+                    Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
+                    Err(e) => tracing::trace!(?e, "sync error before wipe"),
+                }
+            }
+            self.update_metrics();
+
             // Wipe state from prevous iterations.
             self.prospective_tips = HashSet::new();
             self.pending_blocks = Box::pin(FuturesUnordered::new());
+            self.update_metrics();
 
             tracing::info!("starting sync, obtaining new tips");
-            if self.obtain_tips().await.is_err() {
-                tracing::warn!("failed to obtain tips, waiting to restart sync");
-                delay_for(SYNC_RESTART_TIMEOUT).await;
-                continue 'sync;
+            if self.obtain_tips().await.is_err() || self.prospective_tips.is_empty() {
+                // Retry ObtainTips once
+                tracing::info!("failed to obtain tips, waiting to retry obtain tips");
+                delay_for(TIPS_RETRY_TIMEOUT).await;
+                let _ = self.obtain_tips().await;
+
+                if self.prospective_tips.is_empty() {
+                    tracing::warn!("failed to obtain tips, waiting to restart sync");
+                    delay_for(SYNC_RESTART_TIMEOUT).await;
+                    continue 'sync;
+                }
             };
             self.update_metrics();
 
             while !self.prospective_tips.is_empty() {
                 // Check whether any block tasks are currently ready:
                 while let Some(Some(rsp)) = self.pending_blocks.next().now_or_never() {
-                    match rsp.expect("block download tasks should not panic") {
-                        Ok(hash) => tracing::debug!(?hash, "verified and committed block to state"),
+                    match rsp.expect("block download and verify tasks should not panic") {
+                        Ok(hash) => {
+                            tracing::trace!(?hash, "verified and committed block to state");
+                        }
                         Err(e) => {
-                            tracing::info!(?e, "restarting sync");
+                            tracing::warn!(?e, "sync error in ready task, waiting to restart sync");
+                            delay_for(SYNC_RESTART_TIMEOUT).await;
+                            continue 'sync;
+                        }
+                    }
+                }
+                self.update_metrics();
+
+                // If we have too many pending tasks, wait for some to finish.
+                //
+                // Starting to wait is interesting, but logging each wait can be
+                // very verbose.
+                let mut first_wait = true;
+                while self.pending_blocks.len() > LOOKAHEAD_LIMIT {
+                    if first_wait {
+                        tracing::info!(
+                            tips.len = self.prospective_tips.len(),
+                            pending.len = self.pending_blocks.len(),
+                            pending.limit = LOOKAHEAD_LIMIT,
+                            "waiting for pending blocks",
+                        );
+                        first_wait = false;
+                    } else {
+                        tracing::trace!(
+                            tips.len = self.prospective_tips.len(),
+                            pending.len = self.pending_blocks.len(),
+                            pending.limit = LOOKAHEAD_LIMIT,
+                            "continuing to wait for pending blocks",
+                        );
+                    }
+                    match self
+                        .pending_blocks
+                        .next()
+                        .await
+                        .expect("pending_blocks is nonempty")
+                        .expect("block download and verify tasks should not panic")
+                    {
+                        Ok(hash) => {
+                            tracing::trace!(?hash, "verified and committed block to state");
+                        }
+                        Err(e) => {
+                            // We must restart the sync on every error.
+                            // If we don't, the syncer can:
+                            //   - get a long way ahead of the state, and queue
+                            //     up a lot of unverified blocks in memory, or
+                            //   - get into an endless error cycle.
+                            tracing::warn!(?e, "sync error with pending above lookahead limit, waiting to restart sync");
+                            delay_for(SYNC_RESTART_TIMEOUT).await;
                             continue 'sync;
                         }
                     }
                     self.update_metrics();
                 }
 
-                // If we have too many pending tasks, wait for one to finish:
-                if self.pending_blocks.len() > LOOKAHEAD_LIMIT {
-                    tracing::debug!(
-                        tips.len = self.prospective_tips.len(),
-                        pending.len = self.pending_blocks.len(),
-                        pending.limit = LOOKAHEAD_LIMIT,
-                        "waiting for pending blocks",
-                    );
-                    match self
-                        .pending_blocks
-                        .next()
-                        .await
-                        .expect("pending_blocks is nonempty")
-                        .expect("block download tasks should not panic")
-                    {
-                        Ok(hash) => tracing::debug!(?hash, "verified and committed block to state"),
-                        Err(e) => {
-                            tracing::info!(?e, "restarting sync");
-                            continue 'sync;
-                        }
-                    }
-                } else {
-                    // Otherwise, we can keep extending the tips.
-                    tracing::info!(
-                        tips.len = self.prospective_tips.len(),
-                        pending.len = self.pending_blocks.len(),
-                        pending.limit = LOOKAHEAD_LIMIT,
-                        "extending tips",
-                    );
+                // Once we're below the lookahead limit, we can keep extending the tips.
+                tracing::info!(
+                    tips.len = self.prospective_tips.len(),
+                    pending.len = self.pending_blocks.len(),
+                    pending.limit = LOOKAHEAD_LIMIT,
+                    "extending tips",
+                );
+                let old_tips = self.prospective_tips.clone();
+                let _ = self.extend_tips().await;
+
+                // If ExtendTips fails, wait, then give it another shot.
+                //
+                // If we don't have many peers, waiting and retrying helps us
+                // ignore unsolicited BlockHashes from peers.
+                if self.prospective_tips.is_empty() {
+                    self.update_metrics();
+                    tracing::info!("no new tips, waiting to retry extend tips");
+                    delay_for(TIPS_RETRY_TIMEOUT).await;
+                    self.prospective_tips = old_tips;
                     let _ = self.extend_tips().await;
                 }
                 self.update_metrics();
             }
 
-            tracing::info!("exhausted tips, waiting to restart sync");
+            tracing::warn!("exhausted tips, waiting to restart sync");
             delay_for(SYNC_RESTART_TIMEOUT).await;
         }
     }
@@ -198,6 +317,24 @@ where
         while let Some(res) = requests.next().await {
             match res.map_err::<Report, _>(|e| eyre!(e)) {
                 Ok(zn::Response::BlockHashes(hashes)) => {
+                    tracing::trace!(?hashes);
+
+                    // zcashd sometimes appends an unrelated hash at the start
+                    // or end of its response.
+                    //
+                    // We can't discard the first hash, because it might be a
+                    // block we want to download. So we just accept any
+                    // out-of-order first hashes.
+
+                    // We use the last hash for the tip, and we want to avoid bad
+                    // tips. So we discard the last hash. (We don't need to worry
+                    // about missed downloads, because we will pick them up again
+                    // in ExtendTips.)
+                    let hashes = match hashes.split_last() {
+                        None => continue,
+                        Some((_last, rest)) => rest,
+                    };
+
                     let mut first_unknown = None;
                     for (i, &hash) in hashes.iter().enumerate() {
                         if !self.state_contains(hash).await? {
@@ -230,7 +367,10 @@ where
                         tracing::debug!(?new_tip, "adding new prospective tip");
                         self.prospective_tips.insert(new_tip);
                     } else {
-                        tracing::debug!(?new_tip, "discarding tip already queued for download");
+                        tracing::debug!(
+                            ?new_tip,
+                            "discarding prospective tip: already in download set"
+                        );
                     }
 
                     let prev_download_len = download_set.len();
@@ -279,19 +419,46 @@ where
                 match res.map_err::<Report, _>(|e| eyre!(e)) {
                     Ok(zn::Response::BlockHashes(hashes)) => {
                         tracing::debug!(first = ?hashes.first(), len = ?hashes.len());
+                        tracing::trace!(?hashes);
 
+                        // zcashd sometimes appends an unrelated hash at the
+                        // start or end of its response. Check the first hash
+                        // against the previous response, and discard mismatches
                         let unknown_hashes = match hashes.split_first() {
                             None => continue,
                             Some((expected_hash, rest)) if expected_hash == &tip.expected_next => {
                                 rest
                             }
-                            Some((other_hash, _rest)) => {
-                                tracing::debug!(?other_hash, ?tip.expected_next, "discarding response with unexpected next hash");
-                                continue;
+                            Some((other_hash, rest)) => {
+                                // See if it's just one extra hash
+                                // TODO: un-nest matches, probably by extracting this logic into a function
+                                match rest.split_first() {
+                                    None => {
+                                        tracing::debug!(?other_hash, ?tip.expected_next, ?tip.tip, "discarding response containing a single unexpected hash");
+                                        continue;
+                                    }
+                                    Some((expected_hash, rest))
+                                        if expected_hash == &tip.expected_next =>
+                                    {
+                                        tracing::debug!(?other_hash, ?tip.expected_next, ?tip.tip, "discarding unexpected next hash, using the rest");
+                                        rest
+                                    }
+                                    Some((after_other_hash, _rest)) => {
+                                        tracing::debug!(?other_hash, ?after_other_hash, ?tip.expected_next, ?tip.tip, "discarding response with two unexpected hashes");
+                                        continue;
+                                    }
+                                }
                             }
                         };
 
-                        tracing::trace!(?unknown_hashes);
+                        // We use the last hash for the tip, and we want to avoid
+                        // bad tips. So we discard the last hash. (We don't need
+                        // to worry about missed downloads, because we will pick
+                        // them up again in the next ExtendTips.)
+                        let unknown_hashes = match unknown_hashes.split_last() {
+                            None => continue,
+                            Some((_last, rest)) => rest,
+                        };
 
                         let new_tip = if let Some(end) = unknown_hashes.rchunks_exact(2).next() {
                             CheckedTip {
@@ -303,13 +470,16 @@ where
                             continue;
                         };
 
-                        tracing::trace!(?hashes);
+                        tracing::trace!(?unknown_hashes);
 
                         if !download_set.contains(&new_tip.expected_next) {
                             tracing::debug!(?new_tip, "adding new prospective tip");
                             self.prospective_tips.insert(new_tip);
                         } else {
-                            tracing::debug!(?new_tip, "discarding tip already queued for download");
+                            tracing::debug!(
+                                ?new_tip,
+                                "discarding prospective tip: already in download set"
+                            );
                         }
 
                         let prev_download_len = download_set.len();
@@ -333,7 +503,7 @@ where
         Ok(())
     }
 
-    /// Queue a download for the genesis block, if it isn't currently known to
+    /// Download and verify the genesis block, if it isn't currently known to
     /// our node.
     async fn request_genesis(&mut self) -> Result<(), Report> {
         // Due to Bitcoin protocol limitations, we can't request the genesis
@@ -342,29 +512,33 @@ where
         //  - responses start with the block *after* the requested block, and
         //  - the genesis hash is used as a placeholder for "no matches".
         //
-        // So we just queue the genesis block here.
+        // So we just download and verify the genesis block here.
         while !self.state_contains(self.genesis_hash).await? {
             self.request_blocks(vec![self.genesis_hash]).await?;
             match self
                 .pending_blocks
                 .next()
                 .await
-                .expect("inserted a download request")
-                .expect("block download tasks should not panic")
+                .expect("inserted a download and verify request")
+                .expect("block download and verify tasks should not panic")
             {
-                Ok(hash) => tracing::debug!(?hash, "verified and committed block to state"),
-                Err(e) => tracing::warn!(?e, "could not download genesis block, retrying"),
+                Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
+                Err(e) => {
+                    tracing::warn!(?e, "could not download or verify genesis block, retrying")
+                }
             }
         }
 
         Ok(())
     }
 
-    /// Queue downloads for each block that isn't currently known to our node
+    /// Queue download and verify tasks for each block that isn't currently known to our node
     async fn request_blocks(&mut self, hashes: Vec<block::Hash>) -> Result<(), Report> {
         tracing::debug!(hashes.len = hashes.len(), "requesting blocks");
         for hash in hashes.into_iter() {
-            // TODO: remove this check once the sync service is more reliable
+            // Avoid re-downloading blocks that have already been verified.
+            // This is particularly important for nodes on slow or unreliable
+            // networks.
             if self.state_contains(hash).await? {
                 tracing::debug!(
                     ?hash,
@@ -372,7 +546,7 @@ where
                 );
                 continue;
             }
-            // We construct the block download requests sequentially, waiting
+            // We construct the block requests sequentially, waiting
             // for the peer set to be ready to process each request. This
             // ensures that we start block downloads in the order we want them
             // (though they may resolve out of order), and it means that we
@@ -387,7 +561,7 @@ where
                 .map_err(|e| eyre!(e))?
                 .call(zn::Request::BlocksByHash(iter::once(hash).collect()));
 
-            tracing::debug!(?hash, "requested block");
+            tracing::trace!(?hash, "requested block");
 
             let span = tracing::info_span!("block_fetch_verify", ?hash);
             let mut verifier = self.verifier.clone();
@@ -399,13 +573,21 @@ where
                             .next()
                             .expect("successful response has the block in it"),
                         Ok(_) => unreachable!("wrong response to block request"),
-                        Err(e) => return Err(e),
+                        // Make sure we can distinguish download and verify timeouts
+                        Err(e) => Err(eyre!(e)).wrap_err("failed to download block")?,
                     };
-                    metrics::counter!("sync.downloaded_blocks", 1);
+                    metrics::counter!("sync.downloaded.block.count", 1);
 
-                    let result = verifier.ready_and().await?.call(block).await;
-                    metrics::counter!("sync.verified_blocks", 1);
-                    result
+                    let result = verifier
+                        .ready_and()
+                        .await
+                        .map_err(|e| eyre!(e))?
+                        .call(block)
+                        .await
+                        .map_err(|e| eyre!(e))
+                        .wrap_err("failed to verify block")?;
+                    metrics::counter!("sync.verified.block.count", 1);
+                    Ok(result)
                 }
                 .instrument(span),
             );
@@ -415,10 +597,8 @@ where
         Ok(())
     }
 
-    /// Returns `Ok(true)` if the hash is present in the state, and `Ok(false)`
+    /// Returns `true` if the hash is present in the state, and `false`
     /// if the hash is not present in the state.
-    ///
-    /// Returns `Err(_)` if an error occurs.
     ///
     /// TODO: handle multiple tips in the state.
     async fn state_contains(&mut self, hash: block::Hash) -> Result<bool, Report> {
@@ -447,3 +627,41 @@ where
 }
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Make sure the timeout values are consistent with each other.
+    #[test]
+    fn ensure_timeouts_consistent() {
+        let max_download_retry_time =
+            BLOCK_DOWNLOAD_TIMEOUT.as_secs() * (BLOCK_DOWNLOAD_RETRY_LIMIT as u64);
+        assert!(
+            max_download_retry_time < BLOCK_VERIFY_TIMEOUT.as_secs(),
+            "Verify timeout should allow for previous block download retries"
+        );
+        assert!(
+            BLOCK_DOWNLOAD_TIMEOUT.as_secs() * 2 < SYNC_RESTART_TIMEOUT.as_secs(),
+            "Sync restart should allow for pending and buffered requests to complete"
+        );
+        assert!(
+            BLOCK_DOWNLOAD_TIMEOUT <= zn::REQUEST_TIMEOUT,
+            "Block download timeouts that are greater than the request timeout are ignored"
+        );
+
+        assert!(
+            TIPS_RETRY_TIMEOUT < BLOCK_VERIFY_TIMEOUT,
+            "Verify timeout should allow for retrying tips"
+        );
+        assert!(
+            SYNC_RESTART_TIMEOUT < BLOCK_VERIFY_TIMEOUT,
+            "Verify timeout should allow for a sync restart"
+        );
+
+        assert!(
+            SYNC_RESTART_TIMEOUT < zn::EWMA_DECAY_TIME,
+            "Sync restart should preserve EWMA RTTs"
+        );
+    }
+}

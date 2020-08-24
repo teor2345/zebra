@@ -112,6 +112,16 @@ pub struct CheckpointVerifier {
 
     /// The current progress of this verifier.
     verifier_progress: Progress<block::Height>,
+
+    /// The continguous height of blocks in queued (and state).
+    ///
+    /// Used for logging.
+    contiguous_height: Option<block::Height>,
+
+    /// The last reported continguous height.
+    ///
+    /// Used for logging.
+    last_reported_contiguous_height: Option<block::Height>,
 }
 
 /// The CheckpointVerifier implementation.
@@ -180,6 +190,7 @@ impl CheckpointVerifier {
                 if initial_height >= checkpoint_list.max_height() {
                     (None, Progress::FinalCheckpoint)
                 } else {
+                    metrics::gauge!("checkpoint.previous.height", initial_height.0 as i64);
                     (
                         Some(initial_tip.hash()),
                         Progress::InitialTip(initial_height),
@@ -194,6 +205,8 @@ impl CheckpointVerifier {
             initial_tip_hash,
             queued: BTreeMap::new(),
             verifier_progress,
+            contiguous_height: None,
+            last_reported_contiguous_height: None,
         }
     }
 
@@ -238,11 +251,13 @@ impl CheckpointVerifier {
     /// `height` increases as checkpoints are verified.
     ///
     /// If verification has finished, returns `FinishedVerifying`.
-    fn target_checkpoint_height(&self) -> Target<block::Height> {
+    fn target_checkpoint_height(&mut self) -> Target<block::Height> {
         // Find the height we want to start searching at
         let mut pending_height = match self.previous_checkpoint_height() {
             // Check if we have the genesis block as a special case, to simplify the loop
             BeforeGenesis if !self.queued.contains_key(&block::Height(0)) => {
+                tracing::trace!("Waiting for genesis block");
+                metrics::counter!("checkpoint.waiting.count", 1);
                 return WaitingForBlocks;
             }
             BeforeGenesis => block::Height(0),
@@ -267,6 +282,61 @@ impl CheckpointVerifier {
             if height == block::Height(pending_height.0 + 1) {
                 pending_height = height;
             } else {
+                // Try to log a useful message when we get a large update.
+                //
+                // TODO: work out a better way of logging, or delete these
+                //       diagnostics after sync is working.
+                const LARGE_GAP_HEURISTIC: u32 = 100;
+                match (self.contiguous_height, self.last_reported_contiguous_height) {
+                    (None, _) => {
+                        // TODO: debug?
+                        tracing::info!(contiguous_height = ?pending_height,
+                                       last_contiguous_height = ?self.contiguous_height,
+                                       next_height = ?height,
+                                       "Waiting for a checkpoint range block");
+                        self.last_reported_contiguous_height = Some(pending_height);
+                    }
+                    (Some(contiguous_height), _) if pending_height < contiguous_height => {
+                        // Some blocks were rejected?
+                        tracing::warn!(contiguous_height = ?pending_height,
+                                       last_contiguous_height = ?contiguous_height,
+                                       next_height = ?height,
+                                       "Waiting for lower checkpoint range block");
+                        self.last_reported_contiguous_height = Some(pending_height);
+                    }
+                    (Some(contiguous_height), Some(last_reported_contiguous_height))
+                        if pending_height
+                            >= block::Height(
+                                last_reported_contiguous_height.0 + LARGE_GAP_HEURISTIC,
+                            ) =>
+                    {
+                        // Typically means a new tip or large download
+                        // TODO: debug?
+                        tracing::info!(contiguous_height = ?pending_height,
+                                        last_contiguous_height = ?contiguous_height,
+                                        next_height = ?height,
+                                        "Waiting for a significantly higher checkpoint range block");
+                        self.last_reported_contiguous_height = Some(pending_height);
+                    }
+                    (Some(contiguous_height), _) if pending_height > contiguous_height => {
+                        // Tracing doesn't count as reporting
+                        tracing::trace!(contiguous_height = ?pending_height,
+                                        last_contiguous_height = ?contiguous_height,
+                                        next_height = ?height,
+                                        "Waiting for a nearby higher checkpoint range block");
+                    }
+                    (Some(contiguous_height), _) => {
+                        // Might indicate a stall, if it keeps happening
+                        // But we can't know that here, so just log at trace level
+                        tracing::trace!(contiguous_height = ?pending_height,
+                                        last_contiguous_height = ?contiguous_height,
+                                        next_height = ?height,
+                                        "Waiting for the same checkpoint range block");
+                    }
+                }
+                self.contiguous_height = Some(pending_height);
+
+                metrics::gauge!("checkpoint.contiguous.height", pending_height.0 as i64);
                 break;
             }
         }
@@ -281,11 +351,17 @@ impl CheckpointVerifier {
             .checkpoint_list
             .max_height_in_range((start, Included(pending_height)));
 
-        tracing::debug!(
+        tracing::trace!(
             checkpoint_start = ?start,
             highest_contiguous_block = ?pending_height,
             ?target_checkpoint
         );
+
+        if let Some(block::Height(target_checkpoint)) = target_checkpoint {
+            metrics::gauge!("checkpoint.target.height", target_checkpoint as i64);
+        } else {
+            metrics::counter!("checkpoint.waiting.count", 1);
+        }
 
         target_checkpoint
             .map(Checkpoint)
@@ -356,8 +432,10 @@ impl CheckpointVerifier {
 
         // Ignore heights that aren't checkpoint heights
         if verified_height == self.checkpoint_list.max_height() {
+            metrics::gauge!("checkpoint.previous.height", verified_height.0 as i64);
             self.verifier_progress = FinalCheckpoint;
         } else if self.checkpoint_list.contains(verified_height) {
+            metrics::gauge!("checkpoint.previous.height", verified_height.0 as i64);
             self.verifier_progress = PreviousCheckpoint(verified_height);
             // We're done with the initial tip hash now
             self.initial_tip_hash = None;
@@ -393,7 +471,7 @@ impl CheckpointVerifier {
             Ok(height) => height,
             Err(error) => {
                 // Block errors happen frequently on mainnet, due to bad peers.
-                tracing::debug!(?error);
+                tracing::trace!(?error);
 
                 // Sending might fail, depending on what the caller does with rx,
                 // but there's nothing we can do about it.
@@ -416,7 +494,7 @@ impl CheckpointVerifier {
             if qb.hash == hash {
                 let old_tx = std::mem::replace(&mut qb.tx, tx);
                 let e = "rejected older of duplicate verification requests".into();
-                tracing::debug!(?e);
+                tracing::trace!(?e);
                 let _ = old_tx.send(Err(e));
                 return rx;
             }
@@ -437,7 +515,7 @@ impl CheckpointVerifier {
         qblocks.push(new_qblock);
 
         let is_checkpoint = self.checkpoint_list.contains(height);
-        tracing::debug!(?height, ?hash, ?is_checkpoint, "Queued block");
+        tracing::trace!(?height, ?hash, ?is_checkpoint, "Queued block");
 
         // TODO(teor):
         //   - Remove this log once the CheckpointVerifier is working?
@@ -545,7 +623,6 @@ impl CheckpointVerifier {
                     .expect("every checkpoint height must have a hash"),
             ),
             WaitingForBlocks => {
-                tracing::debug!("waiting for blocks to complete checkpoint range");
                 return;
             }
             FinishedVerifying => {
@@ -632,7 +709,13 @@ impl CheckpointVerifier {
             "the previous checkpoint should match: bad checkpoint list, zebra bug, or bad chain"
         );
 
-        tracing::info!(?current_range, "Verified checkpoint range");
+        let block_count = rev_valid_blocks.len();
+        tracing::info!(?block_count, ?current_range, "Verified checkpoint range");
+        metrics::gauge!(
+            "checkpoint.verified.block.height",
+            target_checkpoint_height.0 as _
+        );
+        metrics::counter!("checkpoint.verified.block.count", block_count as _);
 
         // All the blocks we've kept are valid, so let's verify them
         // in height order.
