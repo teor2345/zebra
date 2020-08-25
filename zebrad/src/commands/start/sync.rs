@@ -1,6 +1,6 @@
 use std::{collections::HashSet, iter, pin::Pin, sync::Arc, time::Duration, time::Instant};
 
-use color_eyre::eyre::{eyre, Report};
+use color_eyre::eyre::{eyre, Report, WrapErr};
 use futures::future::FutureExt;
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::{task::JoinHandle, time::delay_for};
@@ -19,6 +19,9 @@ use zebra_state as zs;
 /// Controls the number of peers used for each ObtainTips and ExtendTips request.
 // XXX in the future, we may not be able to access the checkpoint module.
 const FANOUT: usize = checkpoint::MAX_QUEUED_BLOCKS_PER_HEIGHT;
+/// Controls how many times we will retry each block download.
+const BLOCK_DOWNLOAD_RETRY_LIMIT: usize = 3;
+
 /// Controls how far ahead of the chain tip the syncer tries to download before
 /// waiting for queued verifications to complete. Set to twice the maximum
 /// checkpoint distance.
@@ -30,7 +33,13 @@ const FANOUT: usize = checkpoint::MAX_QUEUED_BLOCKS_PER_HEIGHT;
 const LOOKAHEAD_LIMIT: usize = checkpoint::MAX_CHECKPOINT_HEIGHT_GAP * 2;
 
 /// Controls how long we wait for a block download request to complete.
-const BLOCK_TIMEOUT: Duration = Duration::from_secs(6);
+const BLOCK_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(6);
+/// Controls how long we wait for a block verify task to complete.
+///
+/// Block verification can depend on downloading or verifying other blocks, so
+/// this interval is much longer than the `BLOCK_DOWNLOAD_TIMEOUT`.
+const BLOCK_VERIFY_TIMEOUT: Duration = Duration::from_secs(TIPS_RETRY_TIMEOUT.as_secs() * 2);
+
 /// Controls how long we wait to retry ObtainTips or ExtendTips after they fail.
 ///
 /// This timeout should be long enough to allow some of our peers to clear
@@ -78,7 +87,7 @@ where
     /// Used to download blocks, with retry logic.
     block_network: Retry<RetryLimit, Timeout<ZN>>,
     state: ZS,
-    verifier: ZV,
+    verifier: Timeout<ZV>,
     prospective_tips: HashSet<CheckedTip>,
     pending_blocks: Pin<Box<FuturesUnordered<JoinHandle<Result<block::Hash, Error>>>>>,
     stall_time: Instant,
@@ -101,9 +110,10 @@ where
     ///  - verifier: the zebra-consensus verifier that checks the chain
     pub fn new(chain: Network, peers: ZN, state: ZS, verifier: ZV) -> Self {
         let block_network = ServiceBuilder::new()
-            .retry(RetryLimit::new(3))
-            .timeout(BLOCK_TIMEOUT)
+            .retry(RetryLimit::new(BLOCK_DOWNLOAD_RETRY_LIMIT))
+            .timeout(BLOCK_DOWNLOAD_TIMEOUT)
             .service(peers.clone());
+        let verifier = Timeout::new(verifier, BLOCK_VERIFY_TIMEOUT);
         Self {
             tip_network: peers,
             block_network,
@@ -542,13 +552,21 @@ where
                             .next()
                             .expect("successful response has the block in it"),
                         Ok(_) => unreachable!("wrong response to block request"),
-                        Err(e) => return Err(e),
+                        // Make sure we can distinguish download and verify timeouts
+                        Err(e) => Err(eyre!(e)).wrap_err("failed to download block")?,
                     };
                     metrics::counter!("sync.downloaded_blocks", 1);
 
-                    let result = verifier.ready_and().await?.call(block).await;
+                    let result = verifier
+                        .ready_and()
+                        .await
+                        .map_err(|e| eyre!(e))?
+                        .call(block)
+                        .await
+                        .map_err(|e| eyre!(e))
+                        .wrap_err("failed to verify block")?;
                     metrics::counter!("sync.verified_blocks", 1);
-                    result
+                    Ok(result)
                 }
                 .instrument(span),
             );
@@ -612,3 +630,45 @@ where
 }
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// The PoWAveragingWindow from the Zcash spec.
+    // TODO: replace with shared PoWAveragingWindow constant
+    const POW_AVERAGING_WINDOW: usize = 17;
+
+    /// Make sure the timeout settings are sensible.
+    #[test]
+    fn test_timeout_constants() {
+        let max_download_retry_time =
+            BLOCK_DOWNLOAD_TIMEOUT.as_secs() * (BLOCK_DOWNLOAD_RETRY_LIMIT as u64);
+
+        assert!(
+            max_download_retry_time < BLOCK_VERIFY_TIMEOUT.as_secs(),
+            "Verify timeout should allow for previous block download retries"
+        );
+        assert!(
+            BLOCK_DOWNLOAD_TIMEOUT.as_secs() * (POW_AVERAGING_WINDOW as u64)
+                < BLOCK_VERIFY_TIMEOUT.as_secs(),
+            "Verify timeout should allow for some previous blocks to download"
+        );
+
+        assert!(
+            TIPS_RETRY_TIMEOUT < BLOCK_VERIFY_TIMEOUT,
+            "Verify timeout should allow for retrying tips"
+        );
+        assert!(
+            TIPS_RETRY_TIMEOUT < STALL_TIMEOUT,
+            "Stall timeout should allow for retrying tips"
+        );
+
+        // When the sync stalls, we discard all the tasks. So having a longer
+        // timeout than the stall doesn't make sense.
+        assert!(
+            max_download_retry_time + BLOCK_VERIFY_TIMEOUT.as_secs() < STALL_TIMEOUT.as_secs(),
+            "Block tasks should timeout before the sync stalls"
+        );
+    }
+}
