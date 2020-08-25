@@ -137,7 +137,7 @@ where
             while let Some(Some(rsp)) = self.pending_blocks.next().now_or_never() {
                 // We don't check or reset the stall limit here, because we are
                 // about to restart the sync anyway
-                match rsp.expect("block download tasks should not panic") {
+                match rsp.expect("block download and verify tasks should not panic") {
                     Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
                     Err(e) => tracing::trace!(?e, "sync error before wipe"),
                 }
@@ -171,7 +171,7 @@ where
             while !self.prospective_tips.is_empty() {
                 // Check whether any block tasks are currently ready:
                 while let Some(Some(rsp)) = self.pending_blocks.next().now_or_never() {
-                    match rsp.expect("block download tasks should not panic") {
+                    match rsp.expect("block download and verify tasks should not panic") {
                         Ok(hash) => {
                             tracing::trace!(?hash, "verified and committed block to state");
                             self.reset_stall_time();
@@ -205,7 +205,7 @@ where
                         .next()
                         .await
                         .expect("pending_blocks is nonempty")
-                        .expect("block download tasks should not panic")
+                        .expect("block download and verify tasks should not panic")
                     {
                         Ok(hash) => {
                             tracing::trace!(?hash, "verified and committed block to state");
@@ -486,7 +486,7 @@ where
         Ok(())
     }
 
-    /// Queue a download for the genesis block, if it isn't currently known to
+    /// Download and verify the genesis block, if it isn't currently known to
     /// our node.
     async fn request_genesis(&mut self) -> Result<(), Report> {
         // Due to Bitcoin protocol limitations, we can't request the genesis
@@ -495,25 +495,27 @@ where
         //  - responses start with the block *after* the requested block, and
         //  - the genesis hash is used as a placeholder for "no matches".
         //
-        // So we just queue the genesis block here.
+        // So we just download and verify the genesis block here.
         while !self.state_contains(self.genesis_hash).await? {
             self.request_blocks(vec![self.genesis_hash]).await?;
             match self
                 .pending_blocks
                 .next()
                 .await
-                .expect("inserted a download request")
-                .expect("block download tasks should not panic")
+                .expect("inserted a download and verify request")
+                .expect("block download and verify tasks should not panic")
             {
                 Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
-                Err(e) => tracing::warn!(?e, "could not download genesis block, retrying"),
+                Err(e) => {
+                    tracing::warn!(?e, "could not download or verify genesis block, retrying")
+                }
             }
         }
 
         Ok(())
     }
 
-    /// Queue downloads for each block that isn't currently known to our node
+    /// Queue download and verify tasks for each block that isn't currently known to our node
     async fn request_blocks(&mut self, hashes: Vec<block::Hash>) -> Result<(), Report> {
         tracing::debug!(hashes.len = hashes.len(), "requesting blocks");
         for hash in hashes.into_iter() {
@@ -525,7 +527,7 @@ where
                 );
                 continue;
             }
-            // We construct the block download requests sequentially, waiting
+            // We construct the block requests sequentially, waiting
             // for the peer set to be ready to process each request. This
             // ensures that we start block downloads in the order we want them
             // (though they may resolve out of order), and it means that we
