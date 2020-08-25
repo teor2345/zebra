@@ -190,16 +190,32 @@ where
                 }
                 self.update_metrics();
 
-                // If we have too many pending tasks, wait for one to finish:
-                if self.pending_blocks.len() > LOOKAHEAD_LIMIT {
-                    tracing::info!(
-                        tips.len = self.prospective_tips.len(),
-                        pending.len = self.pending_blocks.len(),
-                        pending.limit = LOOKAHEAD_LIMIT,
-                        stall.elapsed = self.secs_since_last_progress(),
-                        stall.limit = STALL_TIMEOUT.as_secs(),
-                        "waiting for pending blocks",
-                    );
+                // If we have too many pending tasks, wait for some to finish.
+                //
+                // Starting to wait is interesting, but logging each wait can be
+                // very verbose.
+                let mut first_wait = true;
+                while self.pending_blocks.len() > LOOKAHEAD_LIMIT {
+                    if first_wait {
+                        tracing::info!(
+                            tips.len = self.prospective_tips.len(),
+                            pending.len = self.pending_blocks.len(),
+                            pending.limit = LOOKAHEAD_LIMIT,
+                            stall.elapsed = self.secs_since_last_progress(),
+                            stall.limit = STALL_TIMEOUT.as_secs(),
+                            "started waiting for pending blocks",
+                        );
+                        first_wait = false;
+                    } else {
+                        tracing::debug!(
+                            tips.len = self.prospective_tips.len(),
+                            pending.len = self.pending_blocks.len(),
+                            pending.limit = LOOKAHEAD_LIMIT,
+                            stall.elapsed = self.secs_since_last_progress(),
+                            stall.limit = STALL_TIMEOUT.as_secs(),
+                            "continuing to wait for pending blocks",
+                        );
+                    }
                     match self
                         .pending_blocks
                         .next()
@@ -226,30 +242,30 @@ where
                         }
                     }
                     self.update_metrics();
-                } else {
-                    // Otherwise, we can keep extending the tips.
-                    tracing::info!(
-                        tips.len = self.prospective_tips.len(),
-                        pending.len = self.pending_blocks.len(),
-                        pending.limit = LOOKAHEAD_LIMIT,
-                        stall.elapsed = self.secs_since_last_progress(),
-                        stall.limit = STALL_TIMEOUT.as_secs(),
-                        "extending tips",
-                    );
-                    let old_tips = self.prospective_tips.clone();
-                    let _ = self.extend_tips().await;
+                }
 
-                    // If ExtendTips fails, wait, then give it another shot.
-                    //
-                    // If we don't have many peers, waiting and retrying helps us
-                    // ignore unsolicited BlockHashes from peers.
-                    if self.prospective_tips.is_empty() && !self.is_stalled() {
-                        self.update_metrics();
-                        tracing::info!("no new tips, waiting to retry extend tips");
-                        delay_for(TIPS_RETRY_TIMEOUT).await;
-                        self.prospective_tips = old_tips;
-                        let _ = self.extend_tips().await;
-                    }
+                // Once we're below the lookahead limit, we can keep extending the tips.
+                tracing::info!(
+                    tips.len = self.prospective_tips.len(),
+                    pending.len = self.pending_blocks.len(),
+                    pending.limit = LOOKAHEAD_LIMIT,
+                    stall.elapsed = self.secs_since_last_progress(),
+                    stall.limit = STALL_TIMEOUT.as_secs(),
+                    "extending tips",
+                );
+                let old_tips = self.prospective_tips.clone();
+                let _ = self.extend_tips().await;
+
+                // If ExtendTips fails, wait, then give it another shot.
+                //
+                // If we don't have many peers, waiting and retrying helps us
+                // ignore unsolicited BlockHashes from peers.
+                if self.prospective_tips.is_empty() && !self.is_stalled() {
+                    self.update_metrics();
+                    tracing::info!("no new tips, waiting to retry extend tips");
+                    delay_for(TIPS_RETRY_TIMEOUT).await;
+                    self.prospective_tips = old_tips;
+                    let _ = self.extend_tips().await;
                 }
                 self.update_metrics();
             }
