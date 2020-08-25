@@ -82,7 +82,9 @@ where
     ZV: Service<Arc<Block>, Response = block::Hash, Error = Error> + Send + Clone + 'static,
     ZV::Future: Send,
 {
-    /// Used to perform extendtips requests, with no retry logic (failover is handled using fanout).
+    /// Used to perform ObtainTips and ExtendTips requests, with no retry logic
+    /// (failover is handled using fanout).
+    // TODO: do we need a timeout here, or does the network layer handle it?
     tip_network: ZN,
     /// Used to download blocks, with retry logic.
     block_network: Retry<RetryLimit, Timeout<ZN>>,
