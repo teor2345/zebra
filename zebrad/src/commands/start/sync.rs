@@ -209,7 +209,7 @@ where
                         );
                         first_wait = false;
                     } else {
-                        tracing::debug!(
+                        tracing::trace!(
                             tips.len = self.prospective_tips.len(),
                             pending.len = self.pending_blocks.len(),
                             pending.limit = LOOKAHEAD_LIMIT,
@@ -585,7 +585,7 @@ where
                         // Make sure we can distinguish download and verify timeouts
                         Err(e) => Err(eyre!(e)).wrap_err("failed to download block")?,
                     };
-                    metrics::counter!("sync.downloaded_blocks", 1);
+                    metrics::counter!("sync.downloaded.block.count", 1);
 
                     let result = verifier
                         .ready_and()
@@ -595,7 +595,7 @@ where
                         .await
                         .map_err(|e| eyre!(e))
                         .wrap_err("failed to verify block")?;
-                    metrics::counter!("sync.verified_blocks", 1);
+                    metrics::counter!("sync.verified.block.count", 1);
                     Ok(result)
                 }
                 .instrument(span),
