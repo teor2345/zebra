@@ -1,4 +1,4 @@
-use std::{collections::HashSet, iter, pin::Pin, sync::Arc, time::Duration, time::Instant};
+use std::{collections::HashSet, iter, pin::Pin, sync::Arc, time::Duration};
 
 use color_eyre::eyre::{eyre, Report, WrapErr};
 use futures::future::FutureExt;
@@ -20,7 +20,16 @@ use zebra_state as zs;
 // XXX in the future, we may not be able to access the checkpoint module.
 const FANOUT: usize = checkpoint::MAX_QUEUED_BLOCKS_PER_HEIGHT;
 /// Controls how many times we will retry each block download.
-const BLOCK_DOWNLOAD_RETRY_LIMIT: usize = 3;
+///
+/// If all the retries fail, then the syncer will reset, and start downloading
+/// blocks from the verified tip in the state, including blocks which previously
+/// downloaded successfully.
+///
+/// But if a node is on a slow or unreliable network, sync restarts can result
+/// in a flood of download requests, making future syncs more likely to fail.
+///
+/// So it's much faster to retry each block multiple times.
+const BLOCK_DOWNLOAD_RETRY_LIMIT: usize = 10;
 
 /// Controls how far ahead of the chain tip the syncer tries to download before
 /// waiting for queued verifications to complete. Set to twice the maximum
@@ -34,17 +43,33 @@ const LOOKAHEAD_LIMIT: usize = checkpoint::MAX_CHECKPOINT_HEIGHT_GAP * 2;
 
 /// Controls how long we wait for a block download request to complete.
 const BLOCK_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(6);
+
+/// The maximum amount of time that Zebra should take to download a checkpoint.
+///
+/// At 10Mbps, it takes about this long to download Zebra's larger checkpoints.
+/// (Zebra's checkpoints are limited to `MAX_CHECKPOINT_BYTE_COUNT` bytes.)
+//
+// TODO: this is a very large value, here are some ways we could reduce it:
+//   - make checkpoints smaller
+//   - increase the minimum required network speed for Zebra
+//   - avoid re-downloading blocks that have already been queued for download,
+//     queued by the checkpoint verifier, or queued for contextual verification
+//     (with a timeout, because failures can be transient)
+const MAX_CHECKPOINT_DOWNLOAD_SECONDS: u64 = 300;
+
 /// Controls how long we wait for a block verify task to complete.
 ///
-/// Block verification can depend on downloading or verifying other blocks, so
-/// this interval is much longer than the `BLOCK_DOWNLOAD_TIMEOUT`.
-const BLOCK_VERIFY_TIMEOUT: Duration = Duration::from_secs(TIPS_RETRY_TIMEOUT.as_secs() * 2);
+/// This timeout makes sure that the syncer and verifiers do not deadlock.
+/// When the `LOOKAHEAD_LIMIT` is reached, the syncer waits for blocks to verify
+/// (or fail). If the verifiers are also waiting for more blocks from the syncer,
+/// then without a timeout, Zebra would deadlock.
+const BLOCK_VERIFY_TIMEOUT: Duration = Duration::from_secs(MAX_CHECKPOINT_DOWNLOAD_SECONDS);
 
 /// Controls how long we wait to retry ObtainTips or ExtendTips after they fail.
 ///
 /// This timeout should be long enough to allow some of our peers to clear
 /// their connection state. See `SYNC_RESTART_TIMEOUT` for details.
-const TIPS_RETRY_TIMEOUT: Duration = zn::LIVE_PEER_DURATION;
+const TIPS_RETRY_TIMEOUT: Duration = Duration::from_secs(zn::LIVE_PEER_DURATION.as_secs() / 2);
 /// Controls how long we wait to restart syncing after finishing a sync run.
 ///
 /// This timeout should be long enough to:
@@ -56,13 +81,10 @@ const TIPS_RETRY_TIMEOUT: Duration = zn::LIVE_PEER_DURATION;
 ///     particular, zcashd sends "next block range" hints, based on zcashd's
 ///     internal model of our sync progress. But we want to discard these hints,
 ///     so they don't get confused with ObtainTips and ExtendTips responses.
-const SYNC_RESTART_TIMEOUT: Duration = zn::LIVE_PEER_DURATION;
-/// Controls how long we will tolerate errors, before restarting syncing.
 ///
-/// This timeout allows us to ignore some errors or timeouts, as long as we
-/// continue to make progress. When checkpointing, slower nodes
-/// (and testnet nodes) can take a few minutes to download each checkpoint.
-const STALL_TIMEOUT: Duration = Duration::from_secs(zn::LIVE_PEER_DURATION.as_secs() * 8);
+/// Assume each sync run can download at least half the blocks before it fails,
+/// even on instances with slow or unreliable networks.
+const SYNC_RESTART_TIMEOUT: Duration = Duration::from_secs(zn::LIVE_PEER_DURATION.as_secs() / 2);
 
 /// Helps work around defects in the bitcoin protocol by checking whether
 /// the returned hashes actually extend a chain tip.
@@ -92,7 +114,6 @@ where
     verifier: Timeout<ZV>,
     prospective_tips: HashSet<CheckedTip>,
     pending_blocks: Pin<Box<FuturesUnordered<JoinHandle<Result<block::Hash, Error>>>>>,
-    stall_time: Instant,
     genesis_hash: block::Hash,
 }
 
@@ -123,7 +144,6 @@ where
             verifier,
             prospective_tips: HashSet::new(),
             pending_blocks: Box::pin(FuturesUnordered::new()),
-            stall_time: Instant::now() + STALL_TIMEOUT,
             genesis_hash: parameters::genesis_hash(chain),
         }
     }
@@ -137,8 +157,6 @@ where
         'sync: loop {
             // Update metrics for any ready tasks, before wiping state
             while let Some(Some(rsp)) = self.pending_blocks.next().now_or_never() {
-                // We don't check or reset the stall limit here, because we are
-                // about to restart the sync anyway
                 match rsp.expect("block download and verify tasks should not panic") {
                     Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
                     Err(e) => tracing::trace!(?e, "sync error before wipe"),
@@ -149,19 +167,15 @@ where
             // Wipe state from prevous iterations.
             self.prospective_tips = HashSet::new();
             self.pending_blocks = Box::pin(FuturesUnordered::new());
-            self.reset_stall_time();
             self.update_metrics();
 
             tracing::info!("starting sync, obtaining new tips");
             if self.obtain_tips().await.is_err() || self.prospective_tips.is_empty() {
-                // Retry ObtainTips, if we have made progress recently
-                if !self.is_stalled() {
-                    tracing::info!("failed to obtain tips, waiting to retry obtain tips");
-                    delay_for(TIPS_RETRY_TIMEOUT).await;
-                    let _ = self.obtain_tips().await;
-                }
+                // Retry ObtainTips once
+                tracing::info!("failed to obtain tips, waiting to retry obtain tips");
+                delay_for(TIPS_RETRY_TIMEOUT).await;
+                let _ = self.obtain_tips().await;
 
-                // If we aren't making progress, restart
                 if self.prospective_tips.is_empty() {
                     tracing::warn!("failed to obtain tips, waiting to restart sync");
                     delay_for(SYNC_RESTART_TIMEOUT).await;
@@ -176,17 +190,11 @@ where
                     match rsp.expect("block download and verify tasks should not panic") {
                         Ok(hash) => {
                             tracing::trace!(?hash, "verified and committed block to state");
-                            self.reset_stall_time();
                         }
                         Err(e) => {
-                            // Tolerate errors, unless we've stopped making progress
-                            if self.is_stalled() {
-                                tracing::warn!(?e, "stalled while checking currently ready tasks, waiting to restart sync");
-                                delay_for(SYNC_RESTART_TIMEOUT).await;
-                                continue 'sync;
-                            } else {
-                                tracing::trace!(?e, "sync error checking currently ready tasks");
-                            }
+                            tracing::warn!(?e, "sync error in ready task, waiting to restart sync");
+                            delay_for(SYNC_RESTART_TIMEOUT).await;
+                            continue 'sync;
                         }
                     }
                 }
@@ -203,9 +211,7 @@ where
                             tips.len = self.prospective_tips.len(),
                             pending.len = self.pending_blocks.len(),
                             pending.limit = LOOKAHEAD_LIMIT,
-                            stall.elapsed = self.secs_since_last_progress(),
-                            stall.limit = STALL_TIMEOUT.as_secs(),
-                            "started waiting for pending blocks",
+                            "waiting for pending blocks",
                         );
                         first_wait = false;
                     } else {
@@ -213,8 +219,6 @@ where
                             tips.len = self.prospective_tips.len(),
                             pending.len = self.pending_blocks.len(),
                             pending.limit = LOOKAHEAD_LIMIT,
-                            stall.elapsed = self.secs_since_last_progress(),
-                            stall.limit = STALL_TIMEOUT.as_secs(),
                             "continuing to wait for pending blocks",
                         );
                     }
@@ -227,20 +231,16 @@ where
                     {
                         Ok(hash) => {
                             tracing::trace!(?hash, "verified and committed block to state");
-                            self.reset_stall_time();
                         }
                         Err(e) => {
-                            // Tolerate errors, unless we've stopped making progress
-                            if self.is_stalled() {
-                                tracing::warn!(?e, "stalled with pending above lookahead limit, waiting to restart sync");
-                                delay_for(SYNC_RESTART_TIMEOUT).await;
-                                continue 'sync;
-                            } else {
-                                tracing::trace!(
-                                    ?e,
-                                    "sync error with pending above lookahead limit"
-                                );
-                            }
+                            // We must restart the sync on every error.
+                            // If we don't, the syncer can:
+                            //   - get a long way ahead of the state, and queue
+                            //     up a lot of unverified blocks in memory, or
+                            //   - get into an endless error cycle.
+                            tracing::warn!(?e, "sync error with pending above lookahead limit, waiting to restart sync");
+                            delay_for(SYNC_RESTART_TIMEOUT).await;
+                            continue 'sync;
                         }
                     }
                     self.update_metrics();
@@ -251,8 +251,6 @@ where
                     tips.len = self.prospective_tips.len(),
                     pending.len = self.pending_blocks.len(),
                     pending.limit = LOOKAHEAD_LIMIT,
-                    stall.elapsed = self.secs_since_last_progress(),
-                    stall.limit = STALL_TIMEOUT.as_secs(),
                     "extending tips",
                 );
                 let old_tips = self.prospective_tips.clone();
@@ -262,7 +260,7 @@ where
                 //
                 // If we don't have many peers, waiting and retrying helps us
                 // ignore unsolicited BlockHashes from peers.
-                if self.prospective_tips.is_empty() && !self.is_stalled() {
+                if self.prospective_tips.is_empty() {
                     self.update_metrics();
                     tracing::info!("no new tips, waiting to retry extend tips");
                     delay_for(TIPS_RETRY_TIMEOUT).await;
@@ -547,7 +545,9 @@ where
     async fn request_blocks(&mut self, hashes: Vec<block::Hash>) -> Result<(), Report> {
         tracing::debug!(hashes.len = hashes.len(), "requesting blocks");
         for hash in hashes.into_iter() {
-            // TODO: remove this check once the sync service is more reliable
+            // Avoid re-downloading blocks that have already been verified.
+            // This is particularly important for nodes on slow or unreliable
+            // networks.
             if self.state_contains(hash).await? {
                 tracing::debug!(
                     ?hash,
@@ -606,10 +606,8 @@ where
         Ok(())
     }
 
-    /// Returns `Ok(true)` if the hash is present in the state, and `Ok(false)`
+    /// Returns `true` if the hash is present in the state, and `false`
     /// if the hash is not present in the state.
-    ///
-    /// Returns `Err(_)` if an error occurs.
     ///
     /// TODO: handle multiple tips in the state.
     async fn state_contains(&mut self, hash: block::Hash) -> Result<bool, Report> {
@@ -634,28 +632,6 @@ where
             self.prospective_tips.len() as i64
         );
         metrics::gauge!("sync.pending_blocks.len", self.pending_blocks.len() as i64);
-        // How long until the sync stalls, times out, and resets?
-        metrics::gauge!("stall.elapsed", self.secs_since_last_progress() as i64);
-    }
-
-    /// Returns the number of seconds since the last successful block verify.
-    fn secs_since_last_progress(&self) -> u64 {
-        let secs_until_stall = self
-            .stall_time
-            .saturating_duration_since(Instant::now())
-            .as_secs();
-
-        STALL_TIMEOUT.as_secs() - secs_until_stall
-    }
-
-    /// Returns true if we haven't made progress for `STALL_TIMEOUT` seconds.
-    fn is_stalled(&self) -> bool {
-        self.secs_since_last_progress() >= STALL_TIMEOUT.as_secs()
-    }
-
-    /// Resets the stall time.
-    fn reset_stall_time(&mut self) {
-        self.stall_time = Instant::now() + STALL_TIMEOUT;
     }
 }
 
@@ -690,15 +666,8 @@ mod test {
             "Verify timeout should allow for retrying tips"
         );
         assert!(
-            TIPS_RETRY_TIMEOUT < STALL_TIMEOUT,
-            "Stall timeout should allow for retrying tips"
-        );
-
-        // When the sync stalls, we discard all the tasks. So having a longer
-        // timeout than the stall doesn't make sense.
-        assert!(
-            max_download_retry_time + BLOCK_VERIFY_TIMEOUT.as_secs() < STALL_TIMEOUT.as_secs(),
-            "Block tasks should timeout before the sync stalls"
+            SYNC_RESTART_TIMEOUT < BLOCK_VERIFY_TIMEOUT,
+            "Verify timeout should allow for a sync restart"
         );
     }
 }
