@@ -113,7 +113,7 @@ where
     state: ZS,
     verifier: Timeout<ZV>,
     prospective_tips: HashSet<CheckedTip>,
-    pending_blocks: Pin<Box<FuturesUnordered<JoinHandle<Result<block::Hash, Error>>>>>,
+    pending_blocks: Pin<Box<FuturesUnordered<JoinHandle<Result<block::Hash, ReportAndHash>>>>>,
     genesis_hash: block::Hash,
 }
 
@@ -160,7 +160,9 @@ where
             while let Some(Some(rsp)) = self.pending_blocks.next().now_or_never() {
                 match rsp.expect("block download and verify tasks should not panic") {
                     Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
-                    Err(e) => tracing::trace!(?e, "sync error before wipe"),
+                    Err((e, hash)) => {
+                        tracing::trace!(?e, ?hash, "sync error before restarting sync, ignoring")
+                    }
                 }
             }
             self.update_metrics();
@@ -192,10 +194,30 @@ where
                         Ok(hash) => {
                             tracing::trace!(?hash, "verified and committed block to state");
                         }
-                        Err(e) => {
-                            tracing::warn!(?e, "sync error in ready task, waiting to restart sync");
-                            delay_for(SYNC_RESTART_TIMEOUT).await;
-                            continue 'sync;
+                        Err((e, hash)) => {
+                            // We must restart the sync on every error, unless
+                            // this block has already been verified.
+                            //
+                            // If we ignore other errors, the syncer can:
+                            //   - get a long way ahead of the state, and queue
+                            //     up a lot of unverified blocks in memory, or
+                            //   - get into an endless error cycle.
+                            //
+                            // In particular, we must restart if the checkpoint
+                            // verifier has verified the height, but the hash is
+                            // different. In that case, we want to stop following
+                            // the ancient side-chain.
+                            if self.state_contains(hash).await? {
+                                tracing::debug!(?e, ?hash, "sync error in ready task, but block is already verified, ignoring");
+                            } else {
+                                tracing::warn!(
+                                    ?e,
+                                    ?hash,
+                                    "sync error in ready task, waiting to restart sync"
+                                );
+                                delay_for(SYNC_RESTART_TIMEOUT).await;
+                                continue 'sync;
+                            }
                         }
                     }
                 }
@@ -233,15 +255,14 @@ where
                         Ok(hash) => {
                             tracing::trace!(?hash, "verified and committed block to state");
                         }
-                        Err(e) => {
-                            // We must restart the sync on every error.
-                            // If we don't, the syncer can:
-                            //   - get a long way ahead of the state, and queue
-                            //     up a lot of unverified blocks in memory, or
-                            //   - get into an endless error cycle.
-                            tracing::warn!(?e, "sync error with pending above lookahead limit, waiting to restart sync");
-                            delay_for(SYNC_RESTART_TIMEOUT).await;
-                            continue 'sync;
+                        Err((e, hash)) => {
+                            if self.state_contains(hash).await? {
+                                tracing::debug!(?e, ?hash, "sync error with pending above lookahead limit, but block is already verified, ignoring");
+                            } else {
+                                tracing::warn!(?e, ?hash, "sync error with pending above lookahead limit, waiting to restart sync");
+                                delay_for(SYNC_RESTART_TIMEOUT).await;
+                                continue 'sync;
+                            }
                         }
                     }
                     self.update_metrics();
@@ -523,9 +544,11 @@ where
                 .expect("block download and verify tasks should not panic")
             {
                 Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
-                Err(e) => {
-                    tracing::warn!(?e, "could not download or verify genesis block, retrying")
-                }
+                Err((e, hash)) => tracing::warn!(
+                    ?e,
+                    ?hash,
+                    "could not download or verify genesis block, retrying"
+                ),
             }
         }
 
@@ -566,30 +589,37 @@ where
             let span = tracing::info_span!("block_fetch_verify", ?hash);
             let mut verifier = self.verifier.clone();
             let task = tokio::spawn(
+                // TODO: refactor this task into its own async function, and
+                //       wrap_err the result with hash
                 async move {
-                    let block = match block_req.await {
-                        Ok(zn::Response::Blocks(blocks)) => blocks
-                            .into_iter()
-                            .next()
-                            .expect("successful response has the block in it"),
-                        Ok(_) => unreachable!("wrong response to block request"),
-                        // Make sure we can distinguish download and verify timeouts
-                        Err(e) => Err(eyre!(e)).wrap_err("failed to download block")?,
-                    };
-                    metrics::counter!("sync.downloaded.block.count", 1);
+                    async {
+                        let block = match block_req.await {
+                            Ok(zn::Response::Blocks(blocks)) => blocks
+                                .into_iter()
+                                .next()
+                                .expect("successful response has the block in it"),
+                            Ok(_) => unreachable!("wrong response to block request"),
+                            // Make sure we can distinguish download and verify timeouts
+                            Err(e) => Err(eyre!(e)).wrap_err("failed to download block")?,
+                        };
+                        metrics::counter!("sync.downloaded.block.count", 1);
 
-                    let result = verifier
-                        .ready_and()
-                        .await
-                        .map_err(|e| eyre!(e))?
-                        .call(block)
-                        .await
-                        .map_err(|e| eyre!(e))
-                        .wrap_err("failed to verify block")?;
-                    metrics::counter!("sync.verified.block.count", 1);
-                    Ok(result)
-                }
-                .instrument(span),
+                        let result = verifier
+                            .ready_and()
+                            .await
+                            .map_err(|e| eyre!(e))
+                            .wrap_err("verifier service failed to be ready")?
+                            .call(block)
+                            .await
+                            .map_err(|e| eyre!(e))
+                            .wrap_err("failed to verify block")?;
+                        metrics::counter!("sync.verified.block.count", 1);
+                        Result::<block::Hash, Report>::Ok(result)
+                    }
+                    .instrument(span)
+                    .await
+                    .map_err(|e| (e, hash))
+                },
             );
             self.pending_blocks.push(task);
         }
@@ -627,6 +657,7 @@ where
 }
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+type ReportAndHash = (Report, block::Hash);
 
 #[cfg(test)]
 mod test {
