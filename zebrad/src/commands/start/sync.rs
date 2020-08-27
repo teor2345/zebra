@@ -113,7 +113,7 @@ where
     state: ZS,
     verifier: Timeout<ZV>,
     prospective_tips: HashSet<CheckedTip>,
-    pending_blocks: Pin<Box<FuturesUnordered<JoinHandle<Result<block::Hash, ReportAndHash>>>>>,
+    pending_blocks: Pin<Box<FuturesUnordered<JoinHandle<Result<block::Hash, ReportHashHeight>>>>>,
     genesis_hash: block::Hash,
 }
 
@@ -159,9 +159,12 @@ where
             while let Some(Some(rsp)) = self.pending_blocks.next().now_or_never() {
                 match rsp.expect("block download and verify tasks should not panic") {
                     Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
-                    Err((e, hash)) => {
-                        tracing::trace!(?e, ?hash, "sync error before restarting sync, ignoring")
-                    }
+                    Err((e, hash, height)) => tracing::trace!(
+                        ?e,
+                        ?hash,
+                        ?height,
+                        "sync error before restarting sync, ignoring"
+                    ),
                 }
             }
             self.update_metrics();
@@ -193,16 +196,18 @@ where
                         Ok(hash) => {
                             tracing::trace!(?hash, "verified and committed block to state");
                         }
-                        Err((e, hash)) => {
+                        Err((e, hash, height)) => {
                             // We must restart the sync on every error, unless
-                            // the block has already been verified.
+                            // the block hash or height have already been verified.
                             //
                             // If we ignore other errors, the syncer can:
                             //   - get a long way ahead of the state, and queue
                             //     up a lot of unverified blocks in memory, or
                             //   - get into an endless error cycle.
                             if self.state_contains(hash).await? {
-                                tracing::debug!(?e, ?hash, "sync error in ready task, but block is already verified, ignoring");
+                                tracing::debug!(?e, ?hash, ?height, "sync error in ready task, but block is already verified, ignoring");
+                            } else if height <= self.tip_height().await? {
+                                tracing::debug!(?e, ?hash, ?height, "sync error in ready task, but a different block has already been verified at this height, ignoring");
                             } else {
                                 tracing::warn!(
                                     ?e,
@@ -249,11 +254,13 @@ where
                         Ok(hash) => {
                             tracing::trace!(?hash, "verified and committed block to state");
                         }
-                        Err((e, hash)) => {
+                        Err((e, hash, height)) => {
                             if self.state_contains(hash).await? {
-                                tracing::debug!(?e, ?hash, "sync error with pending above lookahead limit, but block is already verified, ignoring");
+                                tracing::debug!(?e, ?hash, ?height, "sync error with pending above lookahead limit, but block is already verified, ignoring");
+                            } else if height <= self.tip_height().await? {
+                                tracing::debug!(?e, ?hash, ?height, "sync error in ready task, but a different block has already been verified at this height, ignoring");
                             } else {
-                                tracing::warn!(?e, ?hash, "sync error with pending above lookahead limit, waiting to restart sync");
+                                tracing::warn!(?e, ?hash, ?height, "sync error with pending above lookahead limit, waiting to restart sync");
                                 delay_for(SYNC_RESTART_TIMEOUT).await;
                                 continue 'sync;
                             }
@@ -548,9 +555,10 @@ where
                 .expect("block download and verify tasks should not panic")
             {
                 Ok(hash) => tracing::trace!(?hash, "verified and committed block to state"),
-                Err((e, hash)) => tracing::warn!(
+                Err((e, hash, height)) => tracing::warn!(
                     ?e,
                     ?hash,
+                    ?height,
                     "could not download or verify genesis block, retrying"
                 ),
             }
@@ -596,34 +604,46 @@ where
                 // TODO: refactor this task into its own async function, and
                 //       wrap_err the result with hash
                 async move {
-                    async {
-                        let block = match block_req.await {
-                            Ok(zn::Response::Blocks(blocks)) => blocks
-                                .into_iter()
-                                .next()
-                                .expect("successful response has the block in it"),
-                            Ok(_) => unreachable!("wrong response to block request"),
-                            // Make sure we can distinguish download and verify timeouts
-                            Err(e) => Err(eyre!(e)).wrap_err("failed to download block")?,
-                        };
-                        metrics::counter!("sync.downloaded.block.count", 1);
+                    let block = match block_req
+                        .await
+                        .map_err(|e| eyre!(e))
+                        .wrap_err("failed to download block")
+                    {
+                        Ok(zn::Response::Blocks(blocks)) => blocks
+                            .into_iter()
+                            .next()
+                            .expect("successful response has the block in it"),
+                        Ok(_) => unreachable!("wrong response to block request"),
+                        // Make sure we can distinguish download and verify timeouts
+                        Err(e) => return Err((e, hash, None)),
+                    };
+                    metrics::counter!("sync.downloaded.block.count", 1);
 
-                        let result = verifier
-                            .ready_and()
-                            .await
-                            .map_err(|e| eyre!(e))
-                            .wrap_err("verifier service failed to be ready")?
-                            .call(block)
-                            .await
-                            .map_err(|e| eyre!(e))
-                            .wrap_err("failed to verify block")?;
-                        metrics::counter!("sync.verified.block.count", 1);
-                        Result::<block::Hash, Report>::Ok(result)
+                    let height = block.coinbase_height();
+                    let verifier = match verifier
+                        .ready_and()
+                        .await
+                        .map_err(|e| eyre!(e))
+                        .wrap_err("verifier service failed to be ready")
+                    {
+                        Ok(verifier) => verifier,
+                        Err(e) => return Err((e, hash, height)),
+                    };
+
+                    match verifier
+                        .call(block)
+                        .await
+                        .map_err(|e| eyre!(e))
+                        .wrap_err("failed to verify block")
+                    {
+                        Ok(hash) => {
+                            metrics::counter!("sync.verified.block.count", 1);
+                            Result::<block::Hash, ReportHashHeight>::Ok(hash)
+                        }
+                        Err(e) => Err((e, hash, height)),
                     }
-                    .instrument(span)
-                    .await
-                    .map_err(|e| (e, hash))
-                },
+                }
+                .instrument(span),
             );
             self.pending_blocks.push(task);
         }
@@ -651,6 +671,47 @@ where
         }
     }
 
+    /// Returns the height of the current tip in the state.
+    ///
+    /// If the state does not contain any blocks, returns None.
+    async fn tip_height(&mut self) -> Result<Option<block::Height>, Report> {
+        // GetTip returns an error if the state is empty, but we want to
+        // distinguish an empty state from other errors.
+        if !self.state_contains(self.genesis_hash).await? {
+            return Ok(None);
+        }
+
+        let hash = match self
+            .state
+            .ready_and()
+            .await
+            .map_err(|e| eyre!(e))?
+            .call(zebra_state::Request::GetTip)
+            .await
+            .map_err(|e| eyre!(e))?
+        {
+            zs::Response::Tip { hash } => hash,
+            _ => unreachable!("wrong response to tip request"),
+        };
+
+        let height = match self
+            .state
+            .ready_and()
+            .await
+            .map_err(|e| eyre!(e))?
+            .call(zebra_state::Request::GetBlock { hash })
+            .await
+            .map_err(|e| eyre!(e))?
+        {
+            zs::Response::Block { block } => block
+                .coinbase_height()
+                .expect("state blocks must have a height"),
+            _ => unreachable!("wrong response to tip request"),
+        };
+
+        Ok(Some(height))
+    }
+
     fn update_metrics(&self) {
         metrics::gauge!(
             "sync.prospective_tips.len",
@@ -661,7 +722,7 @@ where
 }
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
-type ReportAndHash = (Report, block::Hash);
+type ReportHashHeight = (Report, block::Hash, Option<block::Height>);
 
 #[cfg(test)]
 mod test {
