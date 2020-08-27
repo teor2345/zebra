@@ -1,4 +1,4 @@
-use std::{fmt, io};
+use std::{error, fmt, io};
 
 #[cfg(test)]
 use proptest_derive::Arbitrary;
@@ -21,11 +21,21 @@ pub struct Hash(pub [u8; 32]);
 
 impl fmt::Debug for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_tuple("BlockHeaderHash")
+        f.debug_tuple("block::Hash")
             .field(&hex::encode(&self.0))
             .finish()
     }
 }
+
+impl fmt::Display for Hash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // We use Display for wrap_err, so we just forward to Debug for now
+        <Hash as fmt::Debug>::fmt(self, f)
+    }
+}
+
+// We use Error for wrap_err, so it doesn't have a source
+impl error::Error for Hash {}
 
 impl<'a> From<&'a Header> for Hash {
     fn from(block_header: &'a Header) -> Self {

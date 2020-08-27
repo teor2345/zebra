@@ -289,8 +289,7 @@ impl CheckpointVerifier {
                 const LARGE_GAP_HEURISTIC: u32 = 100;
                 match (self.contiguous_height, self.last_reported_contiguous_height) {
                     (None, _) => {
-                        // TODO: debug?
-                        tracing::info!(contiguous_height = ?pending_height,
+                        tracing::debug!(contiguous_height = ?pending_height,
                                        last_contiguous_height = ?self.contiguous_height,
                                        next_height = ?height,
                                        "Waiting for a checkpoint range block");
@@ -311,8 +310,7 @@ impl CheckpointVerifier {
                             ) =>
                     {
                         // Typically means a new tip or large download
-                        // TODO: debug?
-                        tracing::info!(contiguous_height = ?pending_height,
+                        tracing::debug!(contiguous_height = ?pending_height,
                                         last_contiguous_height = ?contiguous_height,
                                         next_height = ?height,
                                         "Waiting for a significantly higher checkpoint range block");
@@ -407,7 +405,10 @@ impl CheckpointVerifier {
             InitialTip(previous_height) | PreviousCheckpoint(previous_height)
                 if (height <= previous_height) =>
             {
-                Err(format!("Block has already been verified. {:?}", height))?
+                Err(format!(
+                    "Block height has already been verified. {:?}",
+                    height
+                ))?
             }
             InitialTip(_) | PreviousCheckpoint(_) => {}
             // We're finished, so no checkpoint height is valid
