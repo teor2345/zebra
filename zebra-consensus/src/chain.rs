@@ -50,15 +50,10 @@ struct ChainCheckpointVerifier {
 
 /// A service that verifies the chain, using its associated `CheckpointVerifier`
 /// and `BlockVerifier`.
-struct ChainVerifier<BV, S>
+struct ChainVerifier<BV>
 where
     BV: Service<Arc<Block>, Response = block::Hash, Error = Error> + Send + Clone + 'static,
     BV::Future: Send + 'static,
-    S: Service<zebra_state::Request, Response = zebra_state::Response, Error = Error>
-        + Send
-        + Clone
-        + 'static,
-    S::Future: Send + 'static,
 {
     /// The underlying `BlockVerifier`, possibly wrapped in other services.
     block_verifier: BV,
@@ -68,9 +63,6 @@ where
     ///
     /// None if all the checkpoints have been verified.
     checkpoint: Option<ChainCheckpointVerifier>,
-
-    /// The underlying `ZebraState`, possibly wrapped in other services.
-    state_service: S,
 
     /// The most recent block height that was submitted to the verifier.
     ///
@@ -87,15 +79,10 @@ type Error = Box<dyn error::Error + Send + Sync + 'static>;
 /// The ChainVerifier service implementation.
 ///
 /// After verification, blocks are added to the underlying state service.
-impl<BV, S> Service<Arc<Block>> for ChainVerifier<BV, S>
+impl<BV> Service<Arc<Block>> for ChainVerifier<BV>
 where
     BV: Service<Arc<Block>, Response = block::Hash, Error = Error> + Send + Clone + 'static,
     BV::Future: Send + 'static,
-    S: Service<zebra_state::Request, Response = zebra_state::Response, Error = Error>
-        + Send
-        + Clone
-        + 'static,
-    S::Future: Send + 'static,
 {
     type Response = block::Hash;
     type Error = Error;
@@ -103,20 +90,19 @@ where
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // We don't expect the state or verifiers to exert backpressure on our
-        // users, so we don't need to call `state_service.poll_ready()` here.
+        // We don't expect the verifiers to exert backpressure on our
+        // users, so we don't need to call the verifiers `poll_ready` here.
         // (And we don't know which verifier to choose at this point, anyway.)
         Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, block: Arc<Block>) -> Self::Future {
-        // TODO(jlusby): Error = Report, handle errors from state_service.
+        // TODO(jlusby): Error = Report
         let height = block.coinbase_height();
         let hash = block.hash();
         let span = tracing::debug_span!("block_verify", ?height, ?hash,);
 
         let mut block_verifier = self.block_verifier.clone();
-        let mut state_service = self.state_service.clone();
         let checkpoint_verifier = self.checkpoint.clone().map(|c| c.verifier);
         let max_checkpoint_height = self.checkpoint.clone().map(|c| c.max_height);
 
@@ -148,18 +134,20 @@ where
                     tracing::debug!("large block height gap: this block or the previous block is out of order");
                 }
 
-                block_verifier
+                let verified_hash = block_verifier
                     .ready_and()
                     .await?
                     .call(block.clone())
                     .await?;
+                assert_eq!(verified_hash, hash, "block verifier returned wrong hash: hashes must be equal");
             } else {
-                checkpoint_verifier
+                                let verified_hash = checkpoint_verifier
                     .expect("missing checkpoint verifier: verifier must be Some if max checkpoint height is Some")
                     .ready_and()
                     .await?
                     .call(block.clone())
                     .await?;
+                assert_eq!(verified_hash, hash, "checkpoint verifier returned wrong hash: hashes must be equal");
             }
 
             tracing::trace!(?height, ?hash, "verified block");
@@ -169,15 +157,7 @@ where
             );
             metrics::counter!("chain.verified.block.count", 1);
 
-            let add_block = state_service
-                .ready_and()
-                .await?
-                .call(zebra_state::Request::AddBlock { block });
-
-            match add_block.await? {
-                zebra_state::Response::Added { hash } => Ok(hash),
-                _ => Err("adding block to zebra-state failed".into()),
-            }
+            Ok(hash)
         }
         .instrument(span)
         .boxed()
@@ -334,7 +314,6 @@ where
         ChainVerifier {
             block_verifier,
             checkpoint,
-            state_service,
             last_block_height: initial_height,
         },
         1,
