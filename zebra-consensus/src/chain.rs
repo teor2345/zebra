@@ -138,9 +138,6 @@ where
         };
 
         async move {
-            // TODO(teor): in the post-sapling checkpoint range, allow callers
-            //             to use BlockVerifier, CheckpointVerifier, or both.
-
             // Call a verifier based on the block height and checkpoints.
             if is_higher_than_max_checkpoint(height, max_checkpoint_height) {
                 // Log a message on unexpected out of order blocks.
@@ -158,17 +155,17 @@ where
                     .await?;
             } else {
                 checkpoint_verifier
-                    .expect("Missing checkpoint verifier: verifier must be Some if max checkpoint height is Some")
+                    .expect("missing checkpoint verifier: verifier must be Some if max checkpoint height is Some")
                     .ready_and()
                     .await?
                     .call(block.clone())
                     .await?;
             }
 
-            tracing::trace!(?height, ?hash, "Verified block");
+            tracing::trace!(?height, ?hash, "verified block");
             metrics::gauge!(
                 "chain.verified.block.height",
-                height.expect("Valid blocks have a block height").0 as _
+                height.expect("valid blocks have a block height").0 as _
             );
             metrics::counter!("chain.verified.block.count", 1);
 
