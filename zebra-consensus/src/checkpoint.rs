@@ -660,14 +660,7 @@ impl CheckpointVerifier {
         );
         metrics::counter!("checkpoint.verified.block.count", block_count as _);
 
-        // All the blocks we've kept are valid, so let's verify them
-        // in height order.
-        for qblock in rev_valid_blocks.drain(..).rev() {
-            // Sending can fail, but there's nothing we can do about it.
-            let _ = qblock.tx.send(Ok(qblock.hash));
-        }
-
-        // Finally, update the checkpoint bounds
+        // Update the checkpoint bounds
         self.update_progress(target_checkpoint_height);
 
         // Ensure that we're making progress
@@ -698,6 +691,44 @@ impl CheckpointVerifier {
             new_target == WaitingForBlocks || new_target == FinishedVerifying,
             "processing must cover all available checkpoints"
         );
+
+        // All the blocks in the current range are valid. Verify and commit them
+        // in height order.
+        for qblock in rev_valid_blocks.drain(..).rev() {
+            // We need to add the block after the previous block is in the state,
+            // and before the current `call` returns. Otherwise, blocks could be
+            // committed out of order.
+            let runtime_handle = tokio::runtime::Handle::current();
+            runtime_handle.block_on(async {
+                let ready_state = state_service.ready_and().await?;
+
+                match ready_state
+                    .call(zebra_state::Request::AddBlock {
+                        block: qblock.block,
+                    })
+                    .await?
+                {
+                    zebra_state::Response::Added {
+                        hash: committed_hash,
+                    } => {
+                        assert_eq!(
+                            committed_hash, qblock.hash,
+                            "state returned wrong hash: hashes must be equal"
+                        );
+                        Ok(qblock.hash)
+                    }
+                    _ => Err(format!(
+                        "adding block {:?} {:?} to state failed",
+                        qblock.block.coinbase_height(),
+                        qblock.hash
+                    ))?,
+                }
+            });
+
+            // Finally, tell the caller the block has been verified and committed.
+            // (Sending can fail, but there's nothing we can do about it.)
+            let _ = qblock.tx.send(Ok(qblock.hash));
+        }
     }
 }
 

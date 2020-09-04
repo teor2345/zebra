@@ -256,7 +256,7 @@ pub(crate) fn init_from_verifiers<BV, S>(
     network: Network,
     block_verifier: BV,
     checkpoint_list: Option<CheckpointList>,
-    state_service: S,
+    _state_service: S,
     initial_tip: Option<Arc<Block>>,
 ) -> impl Service<
     Arc<Block>,
