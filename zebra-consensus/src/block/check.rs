@@ -70,8 +70,16 @@ pub fn difficulty_is_valid(
         ))?;
     }
 
-    // Difficulty filter
-    if hash > &difficulty_threshold {
+    // Context-free difficulty filter for mainnet blocks only.
+    //
+    // Testnet allows minimum-difficulty blocks if there has been a long delay
+    // since the previous block. Since that's a contextual check, which accepts
+    // additional testnet blocks, we can only reject mainnet blocks using the
+    // context-free difficulty filter.
+    //
+    // TODO: move to difficulty contextual validation when implementing the RFC
+    //       (see ticket #802)
+    if network == Network::Mainnet && hash > &difficulty_threshold {
         Err(BlockError::DifficultyFilter(
             *height,
             *hash,
