@@ -1,8 +1,8 @@
+use color_eyre::eyre::eyre;
 use color_eyre::eyre::Report;
-use std::sync::Arc;
 
-use crate::block::Block;
 use crate::serialization::ZcashDeserialize;
+use crate::{block::Block, parameters::NetworkUpgrade};
 
 use super::super::*;
 
@@ -248,16 +248,21 @@ fn compact_bitcoin_test_vectors() {
 
 /// Test blocks using CompactDifficulty.
 #[test]
-#[spandoc::spandoc]
 fn block_difficulty() -> Result<(), Report> {
+    block_difficulty_for_network(Network::Mainnet)?;
+    block_difficulty_for_network(Network::Testnet)?;
+
+    Ok(())
+}
+
+#[spandoc::spandoc]
+fn block_difficulty_for_network(network: Network) -> Result<(), Report> {
     zebra_test::init();
 
-    let mut blockchain = Vec::new();
-    for b in zebra_test::vectors::BLOCKS.iter() {
-        let block = Arc::<Block>::zcash_deserialize(*b)?;
-        let hash = block.hash();
-        blockchain.push((block.clone(), block.coinbase_height().unwrap(), hash));
-    }
+    let block_iter = match network {
+        Network::Mainnet => zebra_test::vectors::MAINNET_BLOCKS.iter(),
+        Network::Testnet => zebra_test::vectors::TESTNET_BLOCKS.iter(),
+    };
 
     let diff_zero = ExpandedDifficulty(U256::zero());
     let diff_one = ExpandedDifficulty(U256::one());
@@ -268,15 +273,20 @@ fn block_difficulty() -> Result<(), Report> {
 
     let mut cumulative_work = PartialCumulativeWork::default();
     let mut previous_cumulative_work = PartialCumulativeWork::default();
-    for (block, height, hash) in blockchain {
-        /// SPANDOC: Calculate the threshold for block {?height}
+
+    for (&height, block) in block_iter {
+        let block =
+            Block::zcash_deserialize(&block[..]).expect("block test vector should deserialize");
+        let hash = block.hash();
+
+        /// SPANDOC: Calculate the threshold for block {?height, ?network}
         let threshold = block
             .header
             .difficulty_threshold
             .to_expanded()
             .expect("Chain blocks have valid difficulty thresholds.");
 
-        /// SPANDOC: Check the difficulty for block {?height, ?threshold, ?hash}
+        /// SPANDOC: Check the difficulty for block {?height, ?network, ?threshold, ?hash}
         {
             assert!(hash <= threshold);
             // also check the comparison operators work
@@ -285,7 +295,15 @@ fn block_difficulty() -> Result<(), Report> {
             assert!(hash < diff_max);
         }
 
-        /// SPANDOC: Check compact round-trip for block {?height}
+        /// SPANDOC: Check the PoWLimit for block {?height, ?network, ?threshold, ?hash}
+        {
+            // the consensus rule
+            assert!(threshold <= ExpandedDifficulty::target_difficulty_limit(network));
+            // check that ordering is transitive, we checked `hash <= threshold` above
+            assert!(hash <= ExpandedDifficulty::target_difficulty_limit(network));
+        }
+
+        /// SPANDOC: Check compact round-trip for block {?height, ?network}
         {
             let canonical_compact = threshold.to_compact();
 
@@ -293,7 +311,7 @@ fn block_difficulty() -> Result<(), Report> {
                        canonical_compact);
         }
 
-        /// SPANDOC: Check the work for block {?height}
+        /// SPANDOC: Check the work for block {?height, ?network}
         {
             let work = block
                 .header
@@ -351,6 +369,111 @@ fn genesis_block_difficulty_for_network(network: Network) -> Result<(), Report> 
     {
         assert_eq!(threshold, ExpandedDifficulty::target_difficulty_limit(network),
                    "genesis block difficulty thresholds must be equal to the PoWLimit");
+    }
+
+    Ok(())
+}
+
+/// Test that testnet minimum-difficulty blocks are valid
+#[test]
+#[spandoc::spandoc]
+fn testnet_minimum_difficulty() -> Result<(), Report> {
+    const MINIMUM_DIFFICULTY_HEIGHTS: &[block::Height] = &[
+        // block time gaps greater than 15 minutes (pre-Blossom)
+        block::Height(299_188),
+        block::Height(299_189),
+        block::Height(299_202),
+        // block time gaps greater than 7.5 minutes (Blossom and later)
+        block::Height(584_000),
+        // these 3 blocks have gaps greater than 7.5 minutes and less than 15 minutes
+        block::Height(903_800),
+        block::Height(903_801),
+        block::Height(1_028_500),
+    ];
+
+    for (&height, _block) in zebra_test::vectors::TESTNET_BLOCKS.iter() {
+        let height = block::Height(height);
+
+        /// SPANDOC: Do minimum difficulty checks for testnet block {?height}
+        if MINIMUM_DIFFICULTY_HEIGHTS.contains(&height) {
+            check_testnet_minimum_difficulty_block(height, true)?;
+        } else {
+            assert!(check_testnet_minimum_difficulty_block(height, false).is_err(),
+                   "all testnet minimum difficulty block test vectors must be tested by the unit tests. Hint: add the failing block to MINIMUM_DIFFICULTY_HEIGHTS");
+        }
+    }
+
+    Ok(())
+}
+
+/// Check that the testnet block at `height` is a testnet minimum difficulty
+/// block.
+///
+/// If `strict` is true, check the minimum difficulty rule height, and make sure
+/// the previous block is in the test vectors. Otherwise, skip blocks that don't
+/// pass these basic checks.
+#[spandoc::spandoc]
+fn check_testnet_minimum_difficulty_block(
+    height: block::Height,
+    strict: bool,
+) -> Result<(), Report> {
+    let block = zebra_test::vectors::TESTNET_BLOCKS
+        .get(&height.0)
+        .expect("test vectors contain the specified minimum difficulty block height");
+    let block = Block::zcash_deserialize(&block[..]).expect("block test vector should deserialize");
+    let hash = block.hash();
+
+    /// SPANDOC: Calculate the threshold for testnet block {?height, ?hash}
+    let threshold = block
+        .header
+        .difficulty_threshold
+        .to_expanded()
+        .expect("Chain blocks have valid difficulty thresholds.");
+
+    /// SPANDOC: Check that the testnet minimum difficulty block hash is less than the PoWLimit {?height, ?threshold, ?hash}
+    {
+        // the minimum difficulty threshold - all blocks pass this threshold, even if
+        // they aren't minimum difficulty blocks
+        assert!(hash <= ExpandedDifficulty::target_difficulty_limit(Network::Testnet),
+                "testnet minimum difficulty hashes must be less than the PoWLimit");
+    }
+
+    /// SPANDOC: Check the height of the testnet minimum difficulty block {?height, ?threshold, ?hash}
+    if !strict {
+        assert!(
+            hash <= threshold,
+            "skipped blocks must not be minimum-difficulty blocks"
+        );
+    }
+
+    if height < block::Height(299_188) {
+        Err(eyre!(
+            "the testnet minimum difficulty rule starts at block 299188"
+        ))?;
+    }
+
+    /// SPANDOC: Make sure testnet minimum difficulty blocks have large time gaps {?height, ?hash}
+    {
+        let previous_block = zebra_test::vectors::TESTNET_BLOCKS.get(&(height.0 - 1));
+        if previous_block.is_none() {
+            Err(eyre!(
+                "test vectors should contain the previous block for each minimum difficulty block"
+            ))?;
+        }
+
+        let previous_block = previous_block.unwrap();
+        let previous_block = Block::zcash_deserialize(&previous_block[..])
+            .expect("block test vector should deserialize");
+        let time_gap = block
+            .header
+            .time
+            .signed_duration_since(previous_block.header.time);
+
+        // zcashd requires a gap that's strictly greater than 6 times the target
+        // threshold, but ZIP-205 and ZIP-208 are ambiguous. See bug #1276.
+        if time_gap <= NetworkUpgrade::minimum_difficulty_spacing_for_height(Network::Testnet, height).expect("minimum difficulty activation is checked earlier in the test") {
+            Err(eyre!("minimum difficulty block times must be more than 6 target spacing intervals apart"))?;
+        }
     }
 
     Ok(())
