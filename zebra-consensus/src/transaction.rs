@@ -89,9 +89,20 @@ where
         let mut redjubjub_verifier = crate::primitives::redjubjub::VERIFIER.clone();
         let mut script_verifier = self.script_verifier.clone();
         async move {
+            let version = tx.version();
+            let is_coinbase = tx.is_coinbase();
+            let hash = tx.hash();
+            let span =
+                tracing::debug_span!("TransactionVerifier::call", ?version, ?is_coinbase, ?hash);
+            let _entered = span.enter();
+
             match &*tx {
                 Transaction::V1 { .. } | Transaction::V2 { .. } | Transaction::V3 { .. } => {
-                    Err(TransactionError::WrongVersion)
+                    Err(TransactionError::WrongVersion {
+                        version,
+                        is_coinbase,
+                        hash,
+                    })
                 }
                 Transaction::V4 {
                     inputs,
@@ -108,10 +119,7 @@ where
                     let mut async_checks = FuturesUnordered::new();
 
                     // Handle transparent inputs and outputs.
-                    // These are left unimplemented!() pending implementation
-                    // of the async script RFC.
-                    #[allow(clippy::if_same_then_else)] // delete when filled in
-                    if tx.is_coinbase() {
+                    if is_coinbase {
                         // do something special for coinbase transactions
                         check::coinbase_tx_does_not_spend_shielded(&tx)?;
                     } else {
@@ -206,7 +214,7 @@ where
                         check?;
                     }
 
-                    Ok(tx.hash())
+                    Ok(hash)
                 }
             }
         }

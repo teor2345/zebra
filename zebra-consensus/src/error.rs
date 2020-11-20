@@ -8,6 +8,7 @@
 use thiserror::Error;
 
 use zebra_chain::primitives::ed25519;
+use zebra_chain::transaction;
 
 use crate::BoxError;
 
@@ -34,8 +35,12 @@ pub enum TransactionError {
     #[error("coinbase transaction failed subsidy validation")]
     Subsidy(#[from] SubsidyError),
 
-    #[error("transaction version number MUST be >= 4")]
-    WrongVersion,
+    #[error("transaction version {version:?} MUST be >= 4, is_coinbase: {is_coinbase:?}, hash: {hash:?}")]
+    WrongVersion {
+        version: u32,
+        is_coinbase: bool,
+        hash: transaction::Hash,
+    },
 
     #[error("at least one of tx_in_count, nShieldedSpend, and nJoinSplit MUST be nonzero")]
     NoTransfer,

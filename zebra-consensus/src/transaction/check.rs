@@ -42,7 +42,11 @@ pub fn some_money_is_spent(tx: &Transaction) -> Result<(), TransactionError> {
                 Err(TransactionError::NoTransfer)
             }
         }
-        _ => Err(TransactionError::WrongVersion),
+        _ => Err(TransactionError::WrongVersion {
+            version: tx.version(),
+            is_coinbase: tx.is_coinbase(),
+            hash: tx.hash(),
+        }),
     }
 }
 
@@ -64,7 +68,11 @@ pub fn any_coinbase_inputs_no_transparent_outputs(
                 Err(TransactionError::NoTransfer)
             }
         }
-        _ => Err(TransactionError::WrongVersion),
+        _ => Err(TransactionError::WrongVersion {
+            version: tx.version(),
+            is_coinbase: tx.is_coinbase(),
+            hash: tx.hash(),
+        }),
     }
 }
 
@@ -102,6 +110,10 @@ pub fn coinbase_tx_does_not_spend_shielded(tx: &Transaction) -> Result<(), Trans
                 Err(TransactionError::CoinbaseHasJoinSplitOrSpend)
             }
         }
-        _ => Err(TransactionError::WrongVersion),
+        _ => Err(TransactionError::WrongVersion {
+            version: tx.version(),
+            is_coinbase: tx.is_coinbase(),
+            hash: tx.hash(),
+        }),
     }
 }

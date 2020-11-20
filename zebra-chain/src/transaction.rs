@@ -107,6 +107,16 @@ impl Transaction {
         Hash::from(self)
     }
 
+    /// Return the transaction version as an integer.
+    pub fn version(&self) -> u32 {
+        match self {
+            Transaction::V1 { .. } => 1,
+            Transaction::V2 { .. } => 2,
+            Transaction::V3 { .. } => 3,
+            Transaction::V4 { .. } => 4,
+        }
+    }
+
     /// Access the transparent inputs of this transaction, regardless of version.
     pub fn inputs(&self) -> &[transparent::Input] {
         match self {
