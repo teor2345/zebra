@@ -488,9 +488,9 @@ dependencies = [
 
 [[package]]
 name = "color-eyre"
-version = "0.5.7"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86bc0bb03923141924d5b713a4acd7607c790f3fbc769abe63fe3f38bb268112"
+checksum = "8fb57305b07ffcc1a4d08808f1f2200647c8e3d91a4c83d2810ae20c997274e0"
 dependencies = [
  "backtrace",
  "color-spantrace",
@@ -2744,7 +2744,7 @@ dependencies = [
 [[package]]
 name = "tower"
 version = "0.4.0"
-source = "git+https://github.com/tower-rs/tower?rev=5e1e07744820028877654c336a3b9fe057bf46f1#5e1e07744820028877654c336a3b9fe057bf46f1"
+source = "git+https://github.com/tower-rs/tower?rev=d4d1c67c6a0e4213a52abcc2b9df6cc58276ee39#d4d1c67c6a0e4213a52abcc2b9df6cc58276ee39"
 dependencies = [
  "futures-core",
  "futures-util",
@@ -2789,7 +2789,7 @@ dependencies = [
 [[package]]
 name = "tower-layer"
 version = "0.3.0"
-source = "git+https://github.com/tower-rs/tower?rev=5e1e07744820028877654c336a3b9fe057bf46f1#5e1e07744820028877654c336a3b9fe057bf46f1"
+source = "git+https://github.com/tower-rs/tower?rev=d4d1c67c6a0e4213a52abcc2b9df6cc58276ee39#d4d1c67c6a0e4213a52abcc2b9df6cc58276ee39"
 
 [[package]]
 name = "tower-service"
