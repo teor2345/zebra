@@ -118,11 +118,12 @@ impl Application for ZebradApp {
 
         // Load config *after* framework components so that we can
         // report an error to the terminal if it occurs.
-        let config = command
+        let mut config = command
             .config_path()
             .map(|path| self.load_config(&path))
             .transpose()?
             .unwrap_or_default();
+        config.sync.adjust_for_network(config.network.network);
 
         let config = command.process_config(config)?;
         self.config = Some(config);

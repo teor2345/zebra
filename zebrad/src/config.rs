@@ -8,6 +8,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use zebra_chain::parameters::Network;
 use zebra_consensus::Config as ConsensusSection;
 use zebra_network::Config as NetworkSection;
 use zebra_state::Config as StateSection;
@@ -127,7 +128,7 @@ impl Default for MetricsSection {
 }
 
 /// Sync configuration section.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct SyncSection {
     /// The maximum number of concurrent block requests during sync.
@@ -159,6 +160,35 @@ impl Default for SyncSection {
         Self {
             max_concurrent_block_requests: 50,
             lookahead_limit: 2_000,
+        }
+    }
+}
+
+impl SyncSection {
+    /// Return the default config for `network`.
+    ///
+    /// Testnet doesn't have as many nodes, so we lower its concurrency and
+    /// lookahead by default.
+    pub fn default_for_network(network: Network) -> SyncSection {
+        match network {
+            Network::Mainnet => SyncSection::default(),
+            Network::Testnet => SyncSection {
+                // There are typically between 5 and 20 available Testnet peers
+                max_concurrent_block_requests: 50,
+                // Limit the amount of blocks we lose after a sync restart, and
+                // the amount of load we put on Testnet peers
+                lookahead_limit: 800,
+            },
+        }
+    }
+
+    /// Adjust the config for `network`.
+    ///
+    /// If the config is set to the defaults for `Mainnet`, but we're on
+    /// `Testnet`, use the `Testnet` defaults.
+    pub fn adjust_for_network(&mut self, network: Network) {
+        if *self == SyncSection::default() {
+            *self = SyncSection::default_for_network(network);
         }
     }
 }
