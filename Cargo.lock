@@ -1263,7 +1263,7 @@ dependencies = [
  "http",
  "indexmap",
  "slab",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tokio-util 0.4.0",
  "tracing",
  "tracing-futures",
@@ -1421,7 +1421,7 @@ dependencies = [
  "itoa",
  "pin-project 1.0.2",
  "socket2",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tower-service",
  "tracing",
  "want",
@@ -1751,7 +1751,7 @@ dependencies = [
  "metrics-util",
  "parking_lot",
  "thiserror",
- "tokio 0.3.5",
+ "tokio 0.3.6",
 ]
 
 [[package]]
@@ -3157,18 +3157,18 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a12a3eb39ee2c231be64487f1fcbe726c8f2514876a55480a5ab8559fc374252"
+checksum = "720ba21c25078711bf456d607987d95bce90f7c3bea5abe1db587862e7a1e87c"
 dependencies = [
  "autocfg",
  "bytes 0.6.0",
  "futures-core",
- "lazy_static",
  "libc",
  "memchr",
  "mio 0.7.6",
  "num_cpus",
+ "once_cell",
  "parking_lot",
  "pin-project-lite 0.2.0",
  "signal-hook-registry",
@@ -3226,7 +3226,7 @@ dependencies = [
  "futures-sink",
  "log",
  "pin-project-lite 0.1.11",
- "tokio 0.3.5",
+ "tokio 0.3.6",
 ]
 
 [[package]]
@@ -3240,7 +3240,7 @@ dependencies = [
  "futures-sink",
  "log",
  "pin-project-lite 0.2.0",
- "tokio 0.3.5",
+ "tokio 0.3.6",
 ]
 
 [[package]]
@@ -3261,7 +3261,7 @@ dependencies = [
  "futures-util",
  "hdrhistogram 6.3.4",
  "pin-project 1.0.2",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -3277,7 +3277,7 @@ dependencies = [
  "futures-core",
  "pin-project 0.4.27",
  "rand 0.7.3",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tower",
  "tower-fallback",
  "tracing",
@@ -3291,7 +3291,7 @@ version = "0.1.0"
 dependencies = [
  "futures-core",
  "pin-project 0.4.27",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tower",
  "tracing",
  "zebra-test",
@@ -3900,7 +3900,7 @@ dependencies = [
  "serde",
  "spandoc",
  "thiserror",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tower",
  "tower-batch",
  "tower-fallback",
@@ -3932,7 +3932,7 @@ dependencies = [
  "rand 0.7.3",
  "serde",
  "thiserror",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tokio-util 0.5.1",
  "tower",
  "tracing",
@@ -3981,7 +3981,7 @@ dependencies = [
  "spandoc",
  "tempdir",
  "thiserror",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tower",
  "tracing",
  "zebra-chain",
@@ -4003,7 +4003,7 @@ dependencies = [
  "spandoc",
  "tempdir",
  "thiserror",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "tower",
  "tracing",
  "tracing-error",
@@ -4048,7 +4048,7 @@ dependencies = [
  "serde",
  "tempdir",
  "thiserror",
- "tokio 0.3.5",
+ "tokio 0.3.6",
  "toml",
  "tower",
  "tracing",
