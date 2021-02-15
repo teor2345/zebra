@@ -2323,6 +2323,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_core"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34cf66eb183df1c5876e2dcf6b13d57340741e8dc255b48e40a26de954d06ae7"
+
+[[package]]
 name = "rand_hc"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3865,7 +3871,7 @@ dependencies = [
  "primitive-types",
  "proptest",
  "proptest-derive",
- "rand_core 0.5.1",
+ "rand_core 0.6.2",
  "redjubjub",
  "ripemd160",
  "secp256k1",
