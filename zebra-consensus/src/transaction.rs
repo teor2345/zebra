@@ -150,36 +150,36 @@ where
                     // We finish by waiting on these below.
                     let mut async_checks = FuturesUnordered::new();
 
+                    // Do basic checks first
+                    check::has_inputs_and_outputs(&tx)?;
+
                     // Handle transparent inputs and outputs.
                     if tx.is_coinbase() {
                         check::coinbase_tx_no_joinsplit_or_spend(&tx)?;
                     } else {
-                        // TODO: check no coinbase inputs
-
-                        // feed all of the inputs to the script verifier
+                        // feed all of the inputs to the script and sighash verifiers
                         let cached_ffi_transaction =
                             Arc::new(CachedFfiTransaction::new(tx.clone()));
 
                         for input_index in 0..inputs.len() {
+                            // TODO: make sure the script verifier checks transparent sighash signatures
                             let rsp = script_verifier.ready_and().await?.call(script::Request {
                                 upgrade,
                                 known_utxos: known_utxos.clone(),
                                 cached_ffi_transaction: cached_ffi_transaction.clone(),
                                 input_index,
                             });
-
                             async_checks.push(rsp);
                         }
                     }
 
-                    check::has_inputs_and_outputs(&tx)?;
-
-                    // TODO: rework this code #1377
-                    let sighash = tx.sighash(
+                    // Shielded JoinSplits, Spends, Outputs, and Actions use SIGHASH_ALL,
+                    // and have no transparent inputs
+                    let sighash_shielded: Vec<u8> = tx.sighash(
                         upgrade,
-                        HashType::ALL, // TODO: check these
-                        None,          // TODO: check these
-                    );
+                        HashType::ALL,
+                        None,
+                    ).as_bytes().to_vec();
 
                     if let Some(joinsplit_data) = joinsplit_data {
                         // XXX create a method on JoinSplitData
@@ -189,8 +189,14 @@ where
 
                         // Then, pass those items to self.joinsplit to verify them.
 
-                        // Ignore pending sighash check #1377
-                        let _ = check::validate_joinsplit_sig(joinsplit_data, sighash.as_bytes());
+                        // TODO: stop ignoring errors
+                        check::validate_joinsplit_sig(joinsplit_data, &sighash_shielded).unwrap_or_else(|sighash_error| {
+                            let sighash_error = sighash_error.to_string();
+                            tracing::warn!(%sighash_error, "ignoring sighash error while diagnosing #1377");
+                            metrics::counter!("zebra.sighash.error.sprout.joinsplit",
+                                              1,
+                                              "kind" => sighash_error);
+                        });
                     }
 
                     if let Some(shielded_data) = shielded_data {
@@ -205,12 +211,22 @@ where
                             // description while adding the resulting future to
                             // our collection of async checks that (at a
                             // minimum) must pass for the transaction to verify.
+                            let item: redjubjub::batch::Item = (spend.rk, spend.spend_auth_sig, &sighash_shielded).into();
+                            // TODO: stop ignoring errors
+                            // TODO: switch to async verification
+                            item.clone().verify_single()
+                                .unwrap_or_else(|sighash_error| {
+                            let sighash_error = sighash_error.to_string();
+                            tracing::warn!(%sighash_error, "ignoring sighash error while diagnosing #1377");
+                            metrics::counter!("zebra.sighash.error.sapling.spend",
+                                              1,
+                                              "kind" => sighash_error);
+                        });
+                            //.map_err(|e| BoxError::from(Box::new(e)))?;
                             let _rsp = redjubjub_verifier
                                 .ready_and()
                                 .await?
-                                .call((spend.rk, spend.spend_auth_sig, &sighash).into());
-
-                            // Disable pending sighash check #1377
+                                .call(item);
                             //async_checks.push(rsp.boxed());
 
                             // TODO: prepare public inputs for spends, then create
@@ -239,13 +255,23 @@ where
                         });
 
                         let bvk = shielded_data.binding_verification_key(*value_balance);
+
+                        let item: redjubjub::batch::Item = (bvk, shielded_data.binding_sig, &sighash_shielded).into();
+                        // TODO: stop ignoring errors
+                        // TODO: switch to async verification
+                        item.clone().verify_single().unwrap_or_else(|sighash_error| {
+                            let sighash_error = sighash_error.to_string();
+                            tracing::warn!(%sighash_error, "ignoring sighash error while diagnosing #1377");
+                            metrics::counter!("zebra.sighash.error.sapling.binding",
+                                              1,
+                                              "kind" => sighash_error);
+                        });
+                        //.map_err(|e| BoxError::from(Box::new(e)))?;
                         let _rsp = redjubjub_verifier
                             .ready_and()
                             .await?
-                            .call((bvk, shielded_data.binding_sig, &sighash).into())
+                            .call(item)
                             .boxed();
-
-                        // Disable pending sighash check #1377
                         //async_checks.push(rsp);
                     }
 
