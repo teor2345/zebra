@@ -93,6 +93,15 @@ impl<'a> SigHasher<'a> {
         hash.finalize()
     }
 
+    pub(super) fn personal(&self) -> [u8; 16] {
+        let mut personal = [0; 16];
+        (&mut personal[..12]).copy_from_slice(ZCASH_SIGHASH_PERSONALIZATION_PREFIX);
+        (&mut personal[12..])
+            .write_u32::<LittleEndian>(self.consensus_branch_id().into())
+            .unwrap();
+        personal
+    }
+
     fn consensus_branch_id(&self) -> ConsensusBranchId {
         self.network_upgrade.branch_id().expect(ZIP143_EXPLANATION)
     }
@@ -111,15 +120,6 @@ impl<'a> SigHasher<'a> {
         self.hash_input(&mut writer)?;
 
         Ok(())
-    }
-
-    pub(super) fn personal(&self) -> [u8; 16] {
-        let mut personal = [0; 16];
-        (&mut personal[..12]).copy_from_slice(ZCASH_SIGHASH_PERSONALIZATION_PREFIX);
-        (&mut personal[12..])
-            .write_u32::<LittleEndian>(self.consensus_branch_id().into())
-            .unwrap();
-        personal
     }
 
     fn hash_header<W: io::Write>(&self, mut writer: W) -> Result<(), io::Error> {
