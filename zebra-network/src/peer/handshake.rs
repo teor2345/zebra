@@ -10,9 +10,9 @@ use std::{
 use chrono::{TimeZone, Utc};
 use futures::{
     channel::{mpsc, oneshot},
-    prelude::*,
+    future, FutureExt, SinkExt, StreamExt,
 };
-use tokio::{net::TcpStream, sync::broadcast, time::timeout};
+use tokio::{net::TcpStream, sync::broadcast, task::JoinError, time::timeout};
 use tokio_util::codec::Framed;
 use tower::Service;
 use tracing::{span, Level, Span};
@@ -180,6 +180,138 @@ where
     }
 }
 
+/// Negotiate the Zcash network protocol version with the remote peer
+/// at `peer_addr`, using the connection `peer_conn`.
+///
+/// We split `Handshake` into its components before calling this function,
+/// to avoid infectious `Sync` bounds on the returned future.
+pub async fn negotiate_version(
+    peer_conn: &mut Framed<TcpStream, Codec>,
+    peer_addr: &SocketAddr,
+    config: Config,
+    nonces: Arc<Mutex<HashSet<Nonce>>>,
+    user_agent: String,
+    our_services: PeerServices,
+    relay: bool,
+) -> Result<(Version, PeerServices), HandshakeError> {
+    // Create a random nonce for this connection
+    let local_nonce = Nonce::default();
+    nonces
+        .lock()
+        .expect("mutex should be unpoisoned")
+        .insert(local_nonce);
+
+    // Don't leak our exact clock skew to our peers. On the other hand,
+    // we can't deviate too much, or zcashd will get confused.
+    // Inspection of the zcashd source code reveals that the timestamp
+    // is only ever used at the end of parsing the version message, in
+    //
+    // pfrom->nTimeOffset = timeWarning.AddTimeData(pfrom->addr, nTime, GetTime());
+    //
+    // AddTimeData is defined in src/timedata.cpp and is a no-op as long
+    // as the difference between the specified timestamp and the
+    // zcashd's local time is less than TIMEDATA_WARNING_THRESHOLD, set
+    // to 10 * 60 seconds (10 minutes).
+    //
+    // nTimeOffset is peer metadata that is never used, except for
+    // statistics.
+    //
+    // To try to stay within the range where zcashd will ignore our clock skew,
+    // truncate the timestamp to the nearest 5 minutes.
+    let now = Utc::now().timestamp();
+    let timestamp = Utc.timestamp(now - now.rem_euclid(5 * 60), 0);
+
+    let our_version = Message::Version {
+        version: constants::CURRENT_VERSION,
+        services: our_services,
+        timestamp,
+        address_recv: (PeerServices::NODE_NETWORK, *peer_addr),
+        // TODO: detect external address (#1893)
+        address_from: (our_services, config.listen_addr),
+        nonce: local_nonce,
+        user_agent: user_agent.clone(),
+        // The protocol works fine if we don't reveal our current block height,
+        // and not sending it means we don't need to be connected to the chain state.
+        start_height: block::Height(0),
+        relay,
+    };
+
+    debug!(?our_version, "sending initial version message");
+    peer_conn.send(our_version).await?;
+
+    let remote_msg = peer_conn
+        .next()
+        .await
+        .ok_or(HandshakeError::ConnectionClosed)??;
+
+    // Check that we got a Version and destructure its fields into the local scope.
+    debug!(?remote_msg, "got message from remote peer");
+    let (remote_nonce, remote_services, remote_version) = if let Message::Version {
+        nonce,
+        services,
+        version,
+        ..
+    } = remote_msg
+    {
+        (nonce, services, version)
+    } else {
+        Err(HandshakeError::UnexpectedMessage(Box::new(remote_msg)))?
+    };
+
+    // Check for nonce reuse, indicating self-connection.
+    let nonce_reuse = {
+        let mut locked_nonces = nonces.lock().expect("mutex should be unpoisoned");
+        let nonce_reuse = locked_nonces.contains(&remote_nonce);
+        // Regardless of whether we observed nonce reuse, clean up the nonce set.
+        locked_nonces.remove(&local_nonce);
+        nonce_reuse
+    };
+    if nonce_reuse {
+        Err(HandshakeError::NonceReuse)?;
+    }
+
+    peer_conn.send(Message::Verack).await?;
+
+    let remote_msg = peer_conn
+        .next()
+        .await
+        .ok_or(HandshakeError::ConnectionClosed)??;
+    if let Message::Verack = remote_msg {
+        debug!("got verack from remote peer");
+    } else {
+        Err(HandshakeError::UnexpectedMessage(Box::new(remote_msg)))?;
+    }
+
+    // XXX in zcashd remote peer can only send one version message and
+    // we would disconnect here if it received a second one. Is it even possible
+    // for that to happen to us here?
+
+    // TODO: Reject incoming connections from nodes that don't know about the current epoch.
+    // zcashd does this:
+    //  const Consensus::Params& consensusParams = chainparams.GetConsensus();
+    //  auto currentEpoch = CurrentEpoch(GetHeight(), consensusParams);
+    //  if (pfrom->nVersion < consensusParams.vUpgrades[currentEpoch].nProtocolVersion)
+    //
+    // For approximately 1.5 days before a network upgrade, zcashd also:
+    //  - avoids old peers, and
+    //  - prefers updated peers.
+    // We haven't decided if we need this behaviour in Zebra yet (see #706).
+    //
+    // At the network upgrade, we also need to disconnect from old peers (see #1334).
+    //
+    // TODO: replace min_for_upgrade(network, MIN_NETWORK_UPGRADE) with
+    //       current_min(network, height) where network is the
+    //       configured network, and height is the best tip's block
+    //       height.
+
+    if remote_version < Version::min_for_upgrade(config.network, constants::MIN_NETWORK_UPGRADE) {
+        // Disconnect if peer is using an obsolete version.
+        Err(HandshakeError::ObsoleteVersion(remote_version))?;
+    }
+
+    Ok((remote_version, remote_services))
+}
+
 impl<S> Service<(TcpStream, SocketAddr)> for Handshake<S>
 where
     S: Service<Request, Response = Response, Error = BoxError> + Clone + Send + 'static,
@@ -195,150 +327,53 @@ where
     }
 
     fn call(&mut self, req: (TcpStream, SocketAddr)) -> Self::Future {
-        let (tcp_stream, addr) = req;
+        let (tcp_stream, peer_addr) = req;
 
-        let connector_span = span!(Level::INFO, "connector", addr = ?addr);
+        let connector_span = span!(Level::INFO, "connector", ?peer_addr);
         // set the peer connection span's parent to the global span, as it
         // should exist independently of its creation source (inbound
         // connection, crawler, initial peer, ...)
-        let connection_span = span!(parent: &self.parent_span, Level::INFO, "peer", addr = ?addr);
+        let connection_span = span!(parent: &self.parent_span, Level::INFO, "peer", ?peer_addr);
 
         // Clone these upfront, so they can be moved into the future.
         let nonces = self.nonces.clone();
         let inbound_service = self.inbound_service.clone();
         let timestamp_collector = self.timestamp_collector.clone();
         let inv_collector = self.inv_collector.clone();
-        let network = self.config.network;
-        let our_addr = self.config.listen_addr;
+        let config = self.config.clone();
         let user_agent = self.user_agent.clone();
         let our_services = self.our_services;
         let relay = self.relay;
 
         let fut = async move {
-            debug!("connecting to remote peer");
+            debug!(?peer_addr, "negotiating protocol version with remote peer");
 
             // CORRECTNESS
             //
             // As a defence-in-depth against hangs, every send or next on stream
             // should be wrapped in a timeout.
-            let mut stream = Framed::new(
+            let mut peer_conn = Framed::new(
                 tcp_stream,
                 Codec::builder()
-                    .for_network(network)
-                    .with_metrics_label(addr.ip().to_string())
+                    .for_network(config.network)
+                    .with_metrics_label(peer_addr.ip().to_string())
                     .finish(),
             );
 
-            let local_nonce = Nonce::default();
-            nonces
-                .lock()
-                .expect("mutex should be unpoisoned")
-                .insert(local_nonce);
-
-            // Don't leak our exact clock skew to our peers. On the other hand,
-            // we can't deviate too much, or zcashd will get confused.
-            // Inspection of the zcashd source code reveals that the timestamp
-            // is only ever used at the end of parsing the version message, in
-            //
-            // pfrom->nTimeOffset = timeWarning.AddTimeData(pfrom->addr, nTime, GetTime());
-            //
-            // AddTimeData is defined in src/timedata.cpp and is a no-op as long
-            // as the difference between the specified timestamp and the
-            // zcashd's local time is less than TIMEDATA_WARNING_THRESHOLD, set
-            // to 10 * 60 seconds (10 minutes).
-            //
-            // nTimeOffset is peer metadata that is never used, except for
-            // statistics.
-            //
-            // To try to stay within the range where zcashd will ignore our clock skew,
-            // truncate the timestamp to the nearest 5 minutes.
-            let now = Utc::now().timestamp();
-            let timestamp = Utc.timestamp(now - now.rem_euclid(5 * 60), 0);
-
-            let version = Message::Version {
-                version: constants::CURRENT_VERSION,
-                services: our_services,
-                timestamp,
-                address_recv: (PeerServices::NODE_NETWORK, addr),
-                address_from: (our_services, our_addr),
-                nonce: local_nonce,
-                user_agent,
-                // The protocol works fine if we don't reveal our current block height,
-                // and not sending it means we don't need to be connected to the chain state.
-                start_height: block::Height(0),
-                relay,
-            };
-
-            debug!(?version, "sending initial version message");
-            timeout(constants::REQUEST_TIMEOUT, stream.send(version)).await??;
-
-            let remote_msg = timeout(constants::REQUEST_TIMEOUT, stream.next())
-                .await?
-                .ok_or(HandshakeError::ConnectionClosed)??;
-
-            // Check that we got a Version and destructure its fields into the local scope.
-            debug!(?remote_msg, "got message from remote peer");
-            let (remote_nonce, remote_services, remote_version) = if let Message::Version {
-                nonce,
-                services,
-                version,
-                ..
-            } = remote_msg
-            {
-                (nonce, services, version)
-            } else {
-                return Err(HandshakeError::UnexpectedMessage(Box::new(remote_msg)));
-            };
-
-            // Check for nonce reuse, indicating self-connection.
-            let nonce_reuse = {
-                let mut locked_nonces = nonces.lock().expect("mutex should be unpoisoned");
-                let nonce_reuse = locked_nonces.contains(&remote_nonce);
-                // Regardless of whether we observed nonce reuse, clean up the nonce set.
-                locked_nonces.remove(&local_nonce);
-                nonce_reuse
-            };
-            if nonce_reuse {
-                return Err(HandshakeError::NonceReuse);
-            }
-
-            timeout(constants::REQUEST_TIMEOUT, stream.send(Message::Verack)).await??;
-
-            let remote_msg = timeout(constants::REQUEST_TIMEOUT, stream.next())
-                .await?
-                .ok_or(HandshakeError::ConnectionClosed)??;
-            if let Message::Verack = remote_msg {
-                debug!("got verack from remote peer");
-            } else {
-                return Err(HandshakeError::UnexpectedMessage(Box::new(remote_msg)));
-            }
-
-            // XXX in zcashd remote peer can only send one version message and
-            // we would disconnect here if it received a second one. Is it even possible
-            // for that to happen to us here?
-
-            // TODO: Reject incoming connections from nodes that don't know about the current epoch.
-            // zcashd does this:
-            //  const Consensus::Params& consensusParams = chainparams.GetConsensus();
-            //  auto currentEpoch = CurrentEpoch(GetHeight(), consensusParams);
-            //  if (pfrom->nVersion < consensusParams.vUpgrades[currentEpoch].nProtocolVersion)
-            //
-            // For approximately 1.5 days before a network upgrade, zcashd also:
-            //  - avoids old peers, and
-            //  - prefers updated peers.
-            // We haven't decided if we need this behaviour in Zebra yet (see #706).
-            //
-            // At the network upgrade, we also need to disconnect from old peers (see #1334).
-            //
-            // TODO: replace min_for_upgrade(network, MIN_NETWORK_UPGRADE) with
-            //       current_min(network, height) where network is the
-            //       configured network, and height is the best tip's block
-            //       height.
-
-            if remote_version < Version::min_for_upgrade(network, constants::MIN_NETWORK_UPGRADE) {
-                // Disconnect if peer is using an obsolete version.
-                return Err(HandshakeError::ObsoleteVersion(remote_version));
-            }
+            // Wrap the entire initial connection setup in a timeout.
+            let (remote_version, remote_services) = timeout(
+                constants::HANDSHAKE_TIMEOUT,
+                negotiate_version(
+                    &mut peer_conn,
+                    &peer_addr,
+                    config,
+                    nonces,
+                    user_agent,
+                    our_services,
+                    relay,
+                ),
+            )
+            .await??;
 
             // Set the connection's version to the minimum of the received version or our own.
             let negotiated_version = std::cmp::min(remote_version, constants::CURRENT_VERSION);
@@ -348,7 +383,7 @@ where
             // XXX The tokio documentation says not to do this while any frames are still being processed.
             // Since we don't know that here, another way might be to release the tcp
             // stream from the unversioned Framed wrapper and construct a new one with a versioned codec.
-            let bare_codec = stream.codec_mut();
+            let bare_codec = peer_conn.codec_mut();
             bare_codec.reconfigure_version(negotiated_version);
 
             debug!("constructing client, spawning server");
@@ -365,7 +400,7 @@ where
                 error_slot: slot.clone(),
             };
 
-            let (peer_tx, peer_rx) = stream.split();
+            let (peer_tx, peer_rx) = peer_conn.split();
 
             // Instrument the peer's rx and tx streams.
 
@@ -375,7 +410,7 @@ where
                     "zcash.net.out.messages",
                     1,
                     "command" => msg.to_string(),
-                    "addr" => addr.to_string(),
+                    "addr" => peer_addr.to_string(),
                 );
                 // We need to use future::ready rather than an async block here,
                 // because we need the sink to be Unpin, and the With<Fut, ...>
@@ -389,6 +424,7 @@ where
             // Every message and error must update the peer address state via
             // the inbound_ts_collector.
             let inbound_ts_collector = timestamp_collector.clone();
+            let inv_collector = inv_collector.clone();
             let peer_rx = peer_rx
                 .then(move |msg| {
                     // Add a metric for inbound messages and errors.
@@ -401,12 +437,12 @@ where
                                     "zcash.net.in.messages",
                                     1,
                                     "command" => msg.to_string(),
-                                    "addr" => addr.to_string(),
+                                    "addr" => peer_addr.to_string(),
                                 );
                                 // the collector doesn't depend on network activity,
                                 // so this await should not hang
                                 let _ = inbound_ts_collector
-                                    .send(MetaAddr::new_responded(&addr, &remote_services))
+                                    .send(MetaAddr::new_responded(&peer_addr, &remote_services))
                                     .await;
                             }
                             Err(err) => {
@@ -414,10 +450,10 @@ where
                                     "zebra.net.in.errors",
                                     1,
                                     "error" => err.to_string(),
-                                    "addr" => addr.to_string(),
+                                    "addr" => peer_addr.to_string(),
                                 );
                                 let _ = inbound_ts_collector
-                                    .send(MetaAddr::new_errored(&addr, &remote_services))
+                                    .send(MetaAddr::new_errored(&peer_addr, &remote_services))
                                     .await;
                             }
                         }
@@ -443,13 +479,13 @@ where
                             // merged inv messages into separate inv messages. (#1799)
                             match hashes.as_slice() {
                                 [hash @ InventoryHash::Block(_)] => {
-                                    let _ = inv_collector.send((*hash, addr));
+                                    let _ = inv_collector.send((*hash, peer_addr));
                                 }
                                 [hashes @ ..] => {
                                     for hash in hashes {
                                         if matches!(hash, InventoryHash::Tx(_)) {
                                             debug!(?hash, "registering Tx inventory hash");
-                                            let _ = inv_collector.send((*hash, addr));
+                                            let _ = inv_collector.send((*hash, peer_addr));
                                         } else {
                                             trace!(?hash, "ignoring non Tx inventory hash")
                                         }
@@ -487,10 +523,11 @@ where
             // - every error/shutdown must update the address book state and return
             //
             // The address book state can be updated via `ClientRequest.tx`, or the
-            // timestamp_collector.
+            // heartbeat_ts_collector.
             //
             // Returning from the spawned closure terminates the connection's heartbeat task.
             let heartbeat_span = tracing::debug_span!(parent: connection_span, "heartbeat");
+            let heartbeat_ts_collector = timestamp_collector.clone();
             tokio::spawn(
                 async move {
                     use super::ClientRequest;
@@ -498,7 +535,7 @@ where
 
                     let mut shutdown_rx = shutdown_rx;
                     let mut server_tx = server_tx;
-                    let mut timestamp_collector = timestamp_collector.clone();
+                    let mut timestamp_collector = heartbeat_ts_collector.clone();
                     let mut interval_stream = tokio::time::interval(constants::HEARTBEAT_INTERVAL);
                     loop {
                         let shutdown_rx_ref = Pin::new(&mut shutdown_rx);
@@ -597,7 +634,7 @@ where
                                 tracing::trace!("shutting down due to Client shut down");
                                 // awaiting a local task won't hang
                                 let _ = timestamp_collector
-                                    .send(MetaAddr::new_shutdown(&addr, &remote_services))
+                                    .send(MetaAddr::new_shutdown(&peer_addr, &remote_services))
                                     .await;
                                 return;
                             }
@@ -608,7 +645,7 @@ where
                             // we just update the address book with a failure.
                             let _ = timestamp_collector
                                 .send(MetaAddr::new_errored(
-                                    &addr,
+                                    &peer_addr,
                                     &remote_services,
                                 ))
                                 .await;
@@ -627,11 +664,13 @@ where
         tokio::spawn(fut.instrument(connector_span))
             // This is required to get error types to line up.
             // Probably there's a nicer way to express this using combinators.
-            .map(|x| match x {
-                Ok(Ok(client)) => Ok(client),
-                Ok(Err(handshake_err)) => Err(handshake_err.into()),
-                Err(join_err) => Err(join_err.into()),
-            })
+            .map(
+                |x: Result<Result<Client, HandshakeError>, JoinError>| match x {
+                    Ok(Ok(client)) => Ok(client),
+                    Ok(Err(handshake_err)) => Err(handshake_err.into()),
+                    Err(join_err) => Err(join_err.into()),
+                },
+            )
             .boxed()
     }
 }
