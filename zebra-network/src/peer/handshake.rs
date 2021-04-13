@@ -613,16 +613,16 @@ async fn send_one_heartbeat(server_tx: &mut mpsc::Sender<ClientRequest>) -> Resu
         Ok(()) => {}
         Err(e) => {
             if e.is_disconnected() {
-                Err(PeerError::ConnectionClosed)?
+                Err(PeerError::ConnectionClosed)?;
             } else if e.is_full() {
-                // TODO: instead of closing the connection immediately,
-                // wait for the sink to be ready, or wait for a timeout,
-                // then close the connection with an overloaded error (#1551)
-                Err(PeerError::Overloaded)?
+                // Send the message when the Client becomes ready.
+                // If sending takes too long, the heartbeat timeout will elapse
+                // and close the connection, reducing our load to busy peers.
+                server_tx.send(e.into_inner()).await?;
             } else {
                 // we need to map unexpected error types to PeerErrors
                 warn!(?e, "unexpected try_send error");
-                Err(e)?
+                Err(e)?;
             };
         }
     }
