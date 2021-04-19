@@ -27,6 +27,8 @@ ed25519-zebra = {git = "https://github.com/ZcashFoundation/ed25519-zebra", rev =
 
 # awaiting stable versions which all depend on tokio 1.0, see #1086 for details
 hyper = { git = "https://github.com/hyperium/hyper", rev = "ed2b22a7f66899d338691552fbcb6c0f2f4e06b9" }
-metrics = { git = "https://github.com/ZcashFoundation/metrics", rev = "971133128e5aebe3ad177acffc6154449736cfa2" }
-metrics-exporter-prometheus = { git = "https://github.com/ZcashFoundation/metrics", rev = "971133128e5aebe3ad177acffc6154449736cfa2" }
+# metrics-v0.13.0-alpha.13
+metrics = { git = "https://github.com/teor2345/metrics", rev = "7d7712b3573a7ee9d2e0ce280acc98dbae5c9289" }
+# tokio-0.3 + metrics-exporter-prometheus-v0.1.0-alpha.12
+metrics-exporter-prometheus = { git = "https://github.com/teor2345/metrics", rev = "4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac" }
 tower = { git = "https://github.com/tower-rs/tower", rev = "d4d1c67c6a0e4213a52abcc2b9df6cc58276ee39" }

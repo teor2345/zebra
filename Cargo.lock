@@ -113,12 +113,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28b2cd92db5cbd74e8e5028f7e27dd7aa3090e89e4f2a197cc7c8dfb69c7063b"
 
 [[package]]
-name = "arc-swap"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0688b520bcc7498f6ca8fa006e8031d353e3fd4f51bd4a50fb03cc4230b28bd2"
-
-[[package]]
 name = "arrayref"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -226,12 +220,6 @@ name = "bech32"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c7f7096bc256f5e5cb960f60dfc4f4ef979ca65abe7fb9d5a4f77150d3783d4"
-
-[[package]]
-name = "beef"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "474a626a67200bd107d44179bb3d4fc61891172d11696609264589be6a0e6a43"
 
 [[package]]
 name = "bellman"
@@ -1332,20 +1320,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hdrhistogram"
-version = "7.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3c22708574c44e924720c5b3a116326c688e6d532f438c77c007ec8768644f9"
-dependencies = [
- "base64 0.12.3",
- "byteorder",
- "crossbeam-channel 0.4.4",
- "flate2",
- "nom 5.1.2",
- "num-traits",
-]
-
-[[package]]
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1649,19 +1623,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
-name = "lexical-core"
-version = "0.7.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21f866863575d0e1d654fbeeabdc927292fdf862873dc3c96c6f753357e13374"
-dependencies = [
- "arrayvec 0.5.2",
- "bitflags",
- "cfg-if 1.0.0",
- "ryu",
- "static_assertions",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.93"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1745,6 +1706,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mach"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b823e83b2affd8f40a9ee8c29dbc56404c1e34cd2710921f2801e2cf29527afa"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "match_cfg"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1788,33 +1758,54 @@ dependencies = [
 
 [[package]]
 name = "metrics"
-version = "0.13.0-alpha.8"
-source = "git+https://github.com/ZcashFoundation/metrics?rev=971133128e5aebe3ad177acffc6154449736cfa2#971133128e5aebe3ad177acffc6154449736cfa2"
+version = "0.13.0-alpha.13"
+source = "git+https://github.com/teor2345/metrics?rev=4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac#4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac"
 dependencies = [
- "beef",
- "metrics-macros",
+ "metrics-macros 0.1.0-alpha.9 (git+https://github.com/teor2345/metrics?rev=4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac)",
  "proc-macro-hack",
- "sharded-slab",
+]
+
+[[package]]
+name = "metrics"
+version = "0.13.0-alpha.13"
+source = "git+https://github.com/teor2345/metrics?rev=7d7712b3573a7ee9d2e0ce280acc98dbae5c9289#7d7712b3573a7ee9d2e0ce280acc98dbae5c9289"
+dependencies = [
+ "metrics-macros 0.1.0-alpha.9 (git+https://github.com/teor2345/metrics?rev=7d7712b3573a7ee9d2e0ce280acc98dbae5c9289)",
+ "proc-macro-hack",
 ]
 
 [[package]]
 name = "metrics-exporter-prometheus"
-version = "0.1.0-alpha.7"
-source = "git+https://github.com/ZcashFoundation/metrics?rev=971133128e5aebe3ad177acffc6154449736cfa2#971133128e5aebe3ad177acffc6154449736cfa2"
+version = "0.1.0-alpha.12"
+source = "git+https://github.com/teor2345/metrics?rev=4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac#4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac"
 dependencies = [
- "hdrhistogram 7.1.0",
  "hyper 0.14.0-dev",
- "metrics",
+ "metrics 0.13.0-alpha.13 (git+https://github.com/teor2345/metrics?rev=4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac)",
  "metrics-util",
  "parking_lot",
+ "quanta",
+ "sketches-ddsketch",
  "thiserror",
  "tokio 0.3.6",
 ]
 
 [[package]]
 name = "metrics-macros"
-version = "0.1.0-alpha.5"
-source = "git+https://github.com/ZcashFoundation/metrics?rev=971133128e5aebe3ad177acffc6154449736cfa2#971133128e5aebe3ad177acffc6154449736cfa2"
+version = "0.1.0-alpha.9"
+source = "git+https://github.com/teor2345/metrics?rev=4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac#4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac"
+dependencies = [
+ "lazy_static",
+ "proc-macro-hack",
+ "proc-macro2 1.0.24",
+ "quote 1.0.7",
+ "regex",
+ "syn 1.0.60",
+]
+
+[[package]]
+name = "metrics-macros"
+version = "0.1.0-alpha.9"
+source = "git+https://github.com/teor2345/metrics?rev=7d7712b3573a7ee9d2e0ce280acc98dbae5c9289#7d7712b3573a7ee9d2e0ce280acc98dbae5c9289"
 dependencies = [
  "lazy_static",
  "proc-macro-hack",
@@ -1826,16 +1817,19 @@ dependencies = [
 
 [[package]]
 name = "metrics-util"
-version = "0.4.0-alpha.6"
-source = "git+https://github.com/ZcashFoundation/metrics?rev=971133128e5aebe3ad177acffc6154449736cfa2#971133128e5aebe3ad177acffc6154449736cfa2"
+version = "0.4.0-alpha.10"
+source = "git+https://github.com/teor2345/metrics?rev=4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac#4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac"
 dependencies = [
- "arc-swap",
+ "aho-corasick",
  "atomic-shim",
  "crossbeam-epoch 0.9.0",
  "crossbeam-utils 0.8.0",
  "dashmap",
  "indexmap",
- "metrics",
+ "metrics 0.13.0-alpha.13 (git+https://github.com/teor2345/metrics?rev=4c0e7b54ea8fb3063e7bcb8e1752aeee6807dfac)",
+ "parking_lot",
+ "quanta",
+ "sketches-ddsketch",
 ]
 
 [[package]]
@@ -1951,7 +1945,6 @@ version = "5.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ffb4262d26ed83a1c0a33a38fe2bb15797329c85770da05e6b828ddb782627af"
 dependencies = [
- "lexical-core",
  "memchr",
  "version_check 0.9.2",
 ]
@@ -2291,6 +2284,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "quanta"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b9a7776952c6405aab84c51621523a5e053aa6fd63c8f8e8eeaaed79ad6d2dc"
+dependencies = [
+ "atomic-shim",
+ "ctor",
+ "libc",
+ "mach",
+ "once_cell",
+ "raw-cpuid",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2460,6 +2468,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9fcdd2e881d02f1d9390ae47ad8e5696a9e4be7b547a1da2afbc61973217004"
 dependencies = [
  "rand_core 0.5.1",
+]
+
+[[package]]
+name = "raw-cpuid"
+version = "8.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fdf7d9dbd43f3d81d94a49c1c3df73cc2b3827995147e6cf7f89d4ec5483e73"
+dependencies = [
+ "bitflags",
+ "cc",
+ "rustc_version",
 ]
 
 [[package]]
@@ -2978,6 +2997,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sketches-ddsketch"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a77a8fd93886010f05e7ea0720e569d6d16c65329dbe3ec033bbbccccb017b"
+
+[[package]]
 name = "slab"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3400,7 +3425,7 @@ source = "git+https://github.com/tower-rs/tower?rev=d4d1c67c6a0e4213a52abcc2b9df
 dependencies = [
  "futures-core",
  "futures-util",
- "hdrhistogram 6.3.4",
+ "hdrhistogram",
  "pin-project 1.0.2",
  "tokio 0.3.6",
  "tower-layer 0.3.0",
@@ -4122,7 +4147,7 @@ dependencies = [
  "futures-util",
  "jubjub",
  "lazy_static",
- "metrics",
+ "metrics 0.13.0-alpha.13 (git+https://github.com/teor2345/metrics?rev=7d7712b3573a7ee9d2e0ce280acc98dbae5c9289)",
  "once_cell",
  "pairing",
  "rand 0.8.1",
@@ -4156,7 +4181,7 @@ dependencies = [
  "hex",
  "indexmap",
  "lazy_static",
- "metrics",
+ "metrics 0.13.0-alpha.13 (git+https://github.com/teor2345/metrics?rev=7d7712b3573a7ee9d2e0ce280acc98dbae5c9289)",
  "pin-project 0.4.27",
  "proptest",
  "proptest-derive",
@@ -4202,7 +4227,7 @@ dependencies = [
  "futures 0.3.14",
  "hex",
  "lazy_static",
- "metrics",
+ "metrics 0.13.0-alpha.13 (git+https://github.com/teor2345/metrics?rev=7d7712b3573a7ee9d2e0ce280acc98dbae5c9289)",
  "once_cell",
  "primitive-types",
  "proptest",
@@ -4271,7 +4296,7 @@ dependencies = [
  "gumdrop",
  "hyper 0.14.0-dev",
  "inferno",
- "metrics",
+ "metrics 0.13.0-alpha.13 (git+https://github.com/teor2345/metrics?rev=7d7712b3573a7ee9d2e0ce280acc98dbae5c9289)",
  "metrics-exporter-prometheus",
  "once_cell",
  "pin-project 0.4.27",

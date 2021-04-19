@@ -36,8 +36,8 @@ tracing-futures = "0.2"
 tracing-flame = "0.1.0"
 tracing-subscriber = { version = "0.2.17", features = ["tracing-log"] }
 tracing-error = "0.1.2"
-metrics = "0.13.0-alpha.8"
-metrics-exporter-prometheus = "0.1.0-alpha.7"
+metrics = "0.13.0-alpha.13"
+metrics-exporter-prometheus = "0.1.0-alpha.12"
 
 dirs = "3.0.1"
 inferno = { version = "0.10.3", default-features = false }

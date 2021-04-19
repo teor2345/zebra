@@ -17,7 +17,7 @@ regex = "1"
 serde = { version = "1", features = ["serde_derive"] }
 
 futures = "0.3.14"
-metrics = "0.13.0-alpha.8"
+metrics = "0.13.0-alpha.13"
 tower = { version = "0.4", features = ["buffer", "util"] }
 tracing = "0.1"
 thiserror = "1.0.24"
