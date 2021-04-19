@@ -148,12 +148,13 @@ impl<T> From<AtLeastOne<T>> for Vec<T> {
     }
 }
 
-impl<T> AtLeastOne<T> {
-    /// Returns a reference to the inner vector.
-    pub fn as_vec(&self) -> &Vec<T> {
+impl<T> AsRef<Vec<T>> for AtLeastOne<T> {
+    fn as_ref(&self) -> &Vec<T> {
         &self.inner
     }
+}
 
+impl<T> AtLeastOne<T> {
     /// Converts `self` into a vector without clones or allocation.
     ///
     /// The resulting vector can be converted back into `AtLeastOne` via `try_into`.

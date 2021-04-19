@@ -44,7 +44,7 @@ impl<T: ZcashSerialize> ZcashSerialize for Vec<T> {
 /// items. This is the most common format in Zcash.
 impl<T: ZcashSerialize> ZcashSerialize for AtLeastOne<T> {
     fn zcash_serialize<W: io::Write>(&self, mut writer: W) -> Result<(), io::Error> {
-        self.as_vec().zcash_serialize(&mut writer)
+        self.as_ref().zcash_serialize(&mut writer)
     }
 }
 
