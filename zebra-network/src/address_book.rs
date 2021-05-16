@@ -164,11 +164,7 @@ impl AddressBook {
             return;
         }
 
-        if let Some(prev) = self.get_by_addr(new.addr) {
-            if prev.get_last_seen() > new.get_last_seen() {
-                return;
-            }
-        }
+        // TODO (#1849): validate changes
 
         self.by_addr.insert(new.addr, new);
         std::mem::drop(_guard);
@@ -220,8 +216,8 @@ impl AddressBook {
             None => false,
             // Responded peers are the only peers that can be live
             Some(peer) => {
-                peer.last_connection_state == PeerAddrState::Responded
-                    && peer.get_last_seen() > AddressBook::liveness_cutoff_time()
+                peer.get_last_success().unwrap_or(chrono::MIN_DATETIME)
+                    > AddressBook::liveness_cutoff_time()
             }
         }
     }
@@ -232,7 +228,10 @@ impl AddressBook {
         let _guard = self.span.enter();
         match self.by_addr.get(addr) {
             None => false,
-            Some(peer) => peer.last_connection_state == PeerAddrState::AttemptPending,
+            Some(peer) => {
+                peer.get_last_attempt().unwrap_or(chrono::MIN_DATETIME)
+                    > AddressBook::liveness_cutoff_time()
+            }
         }
     }
 
@@ -245,11 +244,17 @@ impl AddressBook {
     /// Return an iterator over all peers.
     ///
     /// Returns peers in reconnection attempt order, then recently live peers in
-    /// an arbitrary order.
+    /// an arbitrary but stable order.
     pub fn peers(&'_ self) -> impl Iterator<Item = MetaAddr> + '_ {
         let _guard = self.span.enter();
         self.reconnection_peers()
             .chain(self.maybe_connected_peers())
+    }
+
+    /// Return an unordered iterator over all peers.
+    pub fn peers_unordered(&'_ self) -> impl Iterator<Item = &MetaAddr> + '_ {
+        let _guard = self.span.enter();
+        self.by_addr.values()
     }
 
     /// Return an iterator over peers that are due for a reconnection attempt,
@@ -265,16 +270,6 @@ impl AddressBook {
             .filter(move |peer| !self.maybe_connected_addr(&peer.addr))
             .collect::<BTreeSet<_>>()
             .into_iter()
-            .cloned()
-    }
-
-    /// Return an iterator over all the peers in `state`, in arbitrary order.
-    pub fn state_peers(&'_ self, state: PeerAddrState) -> impl Iterator<Item = MetaAddr> + '_ {
-        let _guard = self.span.enter();
-
-        self.by_addr
-            .values()
-            .filter(move |peer| peer.last_connection_state == state)
             .cloned()
     }
 
@@ -314,15 +309,41 @@ impl AddressBook {
 
     /// Returns metrics for the addresses in this address book.
     pub fn address_metrics(&self) -> AddressMetrics {
-        let responded = self.state_peers(PeerAddrState::Responded).count();
+        let responded = self
+            .peers_unordered()
+            .filter(|peer| matches!(peer.last_connection_state, PeerAddrState::Responded { .. }))
+            .count();
         let never_attempted_gossiped = self
-            .state_peers(PeerAddrState::NeverAttemptedGossiped)
+            .peers_unordered()
+            .filter(|peer| {
+                matches!(
+                    peer.last_connection_state,
+                    PeerAddrState::NeverAttemptedGossiped
+                )
+            })
             .count();
         let never_attempted_alternate = self
-            .state_peers(PeerAddrState::NeverAttemptedAlternate)
+            .peers_unordered()
+            .filter(|peer| {
+                matches!(
+                    peer.last_connection_state,
+                    PeerAddrState::NeverAttemptedAlternate
+                )
+            })
             .count();
-        let failed = self.state_peers(PeerAddrState::Failed).count();
-        let attempt_pending = self.state_peers(PeerAddrState::AttemptPending).count();
+        let failed = self
+            .peers_unordered()
+            .filter(|peer| matches!(peer.last_connection_state, PeerAddrState::Failed { .. }))
+            .count();
+        let attempt_pending = self
+            .peers_unordered()
+            .filter(|peer| {
+                matches!(
+                    peer.last_connection_state,
+                    PeerAddrState::AttemptPending { .. }
+                )
+            })
+            .count();
 
         let recently_live = self.recently_live_peers().count();
         let recently_stopped_responding = responded

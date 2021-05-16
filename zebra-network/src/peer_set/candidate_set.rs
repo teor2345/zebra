@@ -42,7 +42,7 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///  │                               │
 ///  │ ┌──────────────────┐          │
 ///  │ │     Inbound      │          │
-///  │ │ Peer Connections │          │
+///  │ │ Peer Connections │──────────┤
 ///  │ └──────────────────┘          │
 ///  │          │                    │
 ///  ├──────────┼────────────────────┼───────────────────────────────┐
@@ -62,12 +62,12 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///  │        ▼                                                       │
 ///  │        Λ                                                       │
 ///  │       ╱ ╲         filter by                                    │
-///  └─────▶▕   ▏!is_potentially_connected                            │
-///          ╲ ╱      to remove live                                  │
-///           V      `Responded` peers                                │
+///  └─────▶▕   ▏  !maybe_connected_addr                              │
+///          ╲ ╱ to remove live `Responded`                           │
+///           V  and `AttemptPending` peers                           │
 ///           │                                                       │
-///           │ Try outbound connection                               │
-///           ▼                                                       │
+///           │    try outbound connection,                           │
+///           ▼ update last_attempted to now()                        │
 ///    ┌────────────────┐                                             │
 ///    │`AttemptPending`│                                             │
 ///    │     Peers      │                                             │
@@ -79,10 +79,10 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///           Λ                                                       │
 ///          ╱ ╲                                                      │
 ///         ▕   ▏─────────────────────────────────────────────────────┘
-///          ╲ ╱   connection failed, update last_seen to now()
+///          ╲ ╱   connection failed, update last_failed to now()
 ///           V
 ///           │
-///           │
+///           │ connection succeeded
 ///           ▼
 ///    ┌────────────┐
 ///    │    send    │
@@ -95,7 +95,7 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///  ┌───────────────────────────────────────┐
 ///  │ every time we receive a peer message: │
 ///  │  * update state to `Responded`        │
-///  │  * update last_seen to now()          │
+///  │  * update last_success to now()       │
 ///  └───────────────────────────────────────┘
 ///
 /// ```
