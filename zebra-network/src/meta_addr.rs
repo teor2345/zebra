@@ -1,4 +1,6 @@
 //! An address-with-metadata type used in Bitcoin networking.
+//!
+//! In Zebra, `MetaAddr`s also track Zebra-specific peer state.
 
 use std::{
     cmp::{Ord, Ordering},
@@ -109,6 +111,25 @@ impl PartialOrd for PeerAddrState {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct MetaAddr {
     /// The peer's address.
+    ///
+    /// The exact meaning depends on `last_connection_state`:
+    ///   - `Responded`: the address we used to make a direct outbound connection
+    ///      to this peer
+    ///   - `NeverAttemptedGossiped`: an unverified address provided by a remote
+    ///      peer
+    ///   - `NeverAttemptedAlternate`: a directly connected peer claimed that
+    ///      this address was its canonical address in its `Version` message,
+    ///      but either:
+    ///      - the peer made an inbound connection to us, or
+    ///      - the address we used to make a direct outbound connection was
+    ///        different from the canonical address
+    ///   - `Failed` or `AttemptPending`: an unverified gossiped or alternate
+    ///      address, or an address from a previous direct outbound connection
+    ///
+    /// ## Security
+    ///
+    /// `addr`s from non-`Responded` peers may be invalid due to outdated
+    /// records, or buggy or malicious peers.
     pub addr: SocketAddr,
 
     /// The services advertised by the peer.
@@ -116,14 +137,17 @@ pub struct MetaAddr {
     /// The exact meaning depends on `last_connection_state`:
     ///   - `Responded`: the services advertised by this peer, the last time we
     ///      performed a handshake with it
-    ///   - `NeverAttempted`: the unverified services provided by the remote peer
-    ///     that sent us this address
+    ///   - `NeverAttemptedGossiped`: the unverified services provided by the
+    ///      remote peer that sent us this address
+    ///   - `NeverAttemptedAlternate`: the services provided by the directly
+    ///      connected peer that claimed that this address was its canonical
+    ///      address
     ///   - `Failed` or `AttemptPending`: unverified services via another peer,
     ///      or services advertised in a previous handshake
     ///
     /// ## Security
     ///
-    /// `services` from `NeverAttempted` peers may be invalid due to outdated
+    /// `services` from non-`Responded` peers may be invalid due to outdated
     /// records, older peer versions, or buggy or malicious peers.
     pub services: PeerServices,
 
@@ -132,7 +156,7 @@ pub struct MetaAddr {
     /// See `get_last_seen` for details.
     last_seen: DateTime<Utc>,
 
-    /// The outcome of our most recent communication attempt with this peer.
+    /// The outcome of our most recent direct outbound connection to this peer.
     pub last_connection_state: PeerAddrState,
 }
 
@@ -226,15 +250,19 @@ impl MetaAddr {
     ///
     /// The exact meaning depends on `last_connection_state`:
     ///   - `Responded`: the last time we processed a message from this peer
-    ///   - `NeverAttempted`: the unverified time provided by the remote peer
-    ///     that sent us this address
+    ///   - `NeverAttemptedGossiped`: the unverified time provided by the remote
+    ///      peer that sent us this address
+    ///   - `NeverAttemptedAlternate`: the local time we received the `Version`
+    ///      message containing this address from a peer
     ///   - `Failed`: the last time we marked the peer as failed
+    ///      TODO: stop updating `last_seen` when peers fail (#1876)
     ///   - `AttemptPending`: the last time we queued the peer for a reconnection
-    ///     attempt
+    ///      attempt
+    ///      TODO: stop updating `last_seen` on connection attempts (#1876)
     ///
     /// ## Security
     ///
-    /// `last_seen` times from `NeverAttempted` peers may be invalid due to
+    /// `last_seen` times from non-`Responded` peers may be invalid due to
     /// clock skew, or buggy or malicious peers.
     pub fn get_last_seen(&self) -> DateTime<Utc> {
         self.last_seen

@@ -15,10 +15,12 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///    to. If we have not received any messages from a `Responded` peer within a
 ///    cutoff time, we assume that it has disconnected or hung, and attempt
 ///    reconnection;
-/// 2. `NeverAttempted` peers, which we learned about from other peers or a DNS
-///    seeder, but have never connected to;
-/// 3. `Failed` peers, to whom we attempted to connect but were unable to;
-/// 4. `AttemptPending` peers, which we've recently queued for reconnection.
+/// 2. `NeverAttemptedGossiped` peers, which we learned about from other peers
+///    or a DNS seeder, but have never connected to;
+/// 3. `NeverAttemptedAlternate` peers, which we learned from the `Version`
+///     messages of directly connected peers, but have never connected to;
+/// 4. `Failed` peers, to whom we attempted to connect but were unable to;
+/// 5. `AttemptPending` peers, which we've recently queued for reconnection.
 ///
 /// ```ascii,no_run
 ///                         ┌──────────────────┐
@@ -45,12 +47,12 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///  │          │                    │
 ///  ├──────────┼────────────────────┼───────────────────────────────┐
 ///  │ PeerSet  ▼  AddressBook       ▼                               │
-///  │ ┌─────────────┐       ┌────────────────┐      ┌─────────────┐ │
-///  │ │  Possibly   │       │`NeverAttempted`│      │  `Failed`   │ │
-///  │ │Disconnected │       │     Peers      │      │   Peers     │◀┼┐
-///  │ │ `Responded` │       │                │      │             │ ││
-///  │ │    Peers    │       │                │      │             │ ││
-///  │ └─────────────┘       └────────────────┘      └─────────────┘ ││
+///  │ ┌─────────────┐  ┌─────────────────────────┐  ┌─────────────┐ │
+///  │ │  Possibly   │  │`NeverAttemptedGossiped` │  │  `Failed`   │ │
+///  │ │Disconnected │  │           and           │  │   Peers     │◀┼┐
+///  │ │ `Responded` │  │`NeverAttemptedAlternate`│  │             │ ││
+///  │ │    Peers    │  │          Peers          │  │             │ ││
+///  │ └─────────────┘  └─────────────────────────┘  └─────────────┘ ││
 ///  │        │                      │                      │        ││
 ///  │ #1 oldest_first        #2 newest_first        #3 oldest_first ││
 ///  │        │                      │                      │        ││
@@ -143,7 +145,7 @@ where
     ///
     /// - Ask a few live `Responded` peers to send us more peers.
     /// - Process all completed peer responses, adding new peers in the
-    ///   `NeverAttempted` state.
+    ///   `NeverAttemptedGossiped` state.
     ///
     /// ## Correctness
     ///
@@ -223,7 +225,7 @@ where
                         "got response to GetPeers"
                     );
 
-                    // New addresses are deserialized in the `NeverAttempted` state
+                    // `MetaAddr`s are deserialized in the `NeverAttemptedGossiped` state
                     //
                     // # Correctness
                     //
@@ -250,7 +252,8 @@ where
     ///
     /// Returns peers in this order:
     /// - oldest `Responded` that are not live
-    /// - newest `NeverAttempted`
+    /// - newest `NeverAttemptedGossiped`
+    /// - newest `NeverAttemptedAlternate`
     /// - oldest `Failed`
     ///
     /// Skips `AttemptPending` peers and live `Responded` peers.

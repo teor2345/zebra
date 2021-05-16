@@ -218,7 +218,7 @@ impl AddressBook {
         let _guard = self.span.enter();
         match self.by_addr.get(addr) {
             None => false,
-            // NeverAttempted, Failed, and AttemptPending peers should never be live
+            // Responded peers are the only peers that can be live
             Some(peer) => {
                 peer.last_connection_state == PeerAddrState::Responded
                     && peer.get_last_seen() > AddressBook::liveness_cutoff_time()
