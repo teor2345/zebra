@@ -440,7 +440,7 @@ where
             }
             HandshakeFailed { failed_addr } => {
                 debug!(?failed_addr.addr, "marking candidate as failed");
-                candidates.report_failed(&failed_addr);
+                candidates.report_failed(&failed_addr.addr);
                 // The demand signal that was taken out of the queue
                 // to attempt to connect to the failed candidate never
                 // turned into a connection, so add it back:

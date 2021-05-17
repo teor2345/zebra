@@ -11,7 +11,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use tracing::Span;
 
-use crate::{constants, types::MetaAddr, Config, PeerAddrState};
+use crate::{constants, meta_addr::MetaAddrChange, types::MetaAddr, Config, PeerAddrState};
 
 /// A database of peer listener addresses, their advertised services, and
 /// information on when they were last seen.
@@ -86,7 +86,6 @@ pub struct AddressMetrics {
     recently_stopped_responding: usize,
 }
 
-#[allow(clippy::len_without_is_empty)]
 impl AddressBook {
     /// Construct an `AddressBook` with the given `config` and [`tracing::Span`].
     pub fn new(config: &Config, span: Span) -> AddressBook {
@@ -104,8 +103,18 @@ impl AddressBook {
         new_book
     }
 
-    /// Get the local listener address.
-    pub fn get_local_listener(&self) -> MetaAddr {
+    /// Returns a Change that adds or updates the local listener address in an
+    /// `AddressBook`.
+    ///
+    /// Our inbound listener port can be advertised to peers by applying this
+    /// change to the inbound request address book.
+    ///
+    /// # Correctness
+    ///
+    /// Avoid inserting this address into the local `AddressBook`.
+    /// (If peers gossip our address back to us, the handshake nonce will
+    /// protect us from self-connections.)
+    pub fn get_local_listener(&self) -> MetaAddrChange {
         MetaAddr::new_local_listener(&self.local_listener)
     }
 
@@ -133,42 +142,50 @@ impl AddressBook {
         self.by_addr.get(&addr).cloned()
     }
 
-    /// Add `new` to the address book, updating the previous entry if `new` is
-    /// more recent or discarding `new` if it is stale.
+    /// Apply `change` to the address book.
+    ///
+    /// If an entry was added or updated, return it.
     ///
     /// # Correctness
     ///
-    /// All new addresses should go through `update`, so that the address book
-    /// only contains valid outbound addresses.
-    pub fn update(&mut self, new: MetaAddr) {
+    /// All address book changes should go through `update`, so that the
+    /// address book only contains valid outbound addresses.
+    pub fn update(&mut self, change: MetaAddrChange) -> Option<MetaAddr> {
         let _guard = self.span.enter();
         trace!(
-            ?new,
+            ?change,
             total_peers = self.by_addr.len(),
             recent_peers = self.recently_live_peers().count(),
         );
+        let addr = change.get_addr();
+        let book_entry = self.by_addr.get(&addr);
 
         // If a node that we are directly connected to has changed to a client,
         // remove it from the address book.
-        if new.is_direct_client() && self.contains_addr(&new.addr) {
+        if change.is_direct_client(&book_entry) && self.contains_addr(&addr) {
             std::mem::drop(_guard);
-            self.take(new.addr);
-            return;
+            self.take(addr);
+            self.update_metrics();
+            return None;
         }
 
         // Never add unspecified addresses or client services.
         //
         // Communication with these addresses can be monitored via Zebra's
         // metrics. (The address book is for valid peer addresses.)
-        if !new.is_valid_for_outbound() {
-            return;
+        if !change.is_valid_for_outbound(&book_entry) {
+            return None;
         }
 
-        // TODO (#1849): validate changes
-
-        self.by_addr.insert(new.addr, new);
-        std::mem::drop(_guard);
-        self.update_metrics();
+        let new_entry = change.into_meta_addr(&book_entry);
+        if let Some(new_entry) = new_entry {
+            self.by_addr.insert(addr, new_entry);
+            std::mem::drop(_guard);
+            self.update_metrics();
+            Some(new_entry)
+        } else {
+            None
+        }
     }
 
     /// Removes the entry with `addr`, returning it if it exists
@@ -307,6 +324,11 @@ impl AddressBook {
         self.by_addr.len()
     }
 
+    /// Is this address book empty?
+    pub fn is_empty(&self) -> bool {
+        self.by_addr.is_empty()
+    }
+
     /// Returns metrics for the addresses in this address book.
     pub fn address_metrics(&self) -> AddressMetrics {
         let responded = self
@@ -438,13 +460,13 @@ impl AddressBook {
     }
 }
 
-impl Extend<MetaAddr> for AddressBook {
+impl Extend<MetaAddrChange> for AddressBook {
     fn extend<T>(&mut self, iter: T)
     where
-        T: IntoIterator<Item = MetaAddr>,
+        T: IntoIterator<Item = MetaAddrChange>,
     {
-        for meta in iter.into_iter() {
-            self.update(meta);
+        for change in iter.into_iter() {
+            self.update(change);
         }
     }
 }

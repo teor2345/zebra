@@ -1,4 +1,4 @@
-use std::{mem, sync::Arc, time::Duration};
+use std::{mem, net::SocketAddr, sync::Arc, time::Duration};
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::time::{sleep, sleep_until, timeout, Sleep};
@@ -11,16 +11,21 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 /// It divides the set of all possible candidate peers into disjoint subsets,
 /// using the `PeerAddrState`:
 ///
-/// 1. `Responded` peers, which we previously had inbound or outbound connections
-///    to. If we have not received any messages from a `Responded` peer within a
-///    cutoff time, we assume that it has disconnected or hung, and attempt
-///    reconnection;
+/// 1. `Responded` peers, which we previously had outbound connections to.
 /// 2. `NeverAttemptedGossiped` peers, which we learned about from other peers
 ///    or a DNS seeder, but have never connected to;
 /// 3. `NeverAttemptedAlternate` peers, which we learned from the `Version`
 ///     messages of directly connected peers, but have never connected to;
 /// 4. `Failed` peers, to whom we attempted to connect but were unable to;
 /// 5. `AttemptPending` peers, which we've recently queued for reconnection.
+///
+/// Never attempted peers are always available for connection.
+///
+/// If a peer's attempted, success, or failed time is recent
+/// (within the liveness limit), we avoid reconnecting to it.
+/// Otherwise, we assume that it has disconnected or hung,
+/// and attempt reconnection.
+///
 ///
 /// ```ascii,no_run
 ///                         ┌──────────────────┐
@@ -61,10 +66,10 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///  ├────────┼──────────────────────────────────────────────────────┘│
 ///  │        ▼                                                       │
 ///  │        Λ                                                       │
-///  │       ╱ ╲         filter by                                    │
-///  └─────▶▕   ▏  !maybe_connected_addr                              │
-///          ╲ ╱ to remove live `Responded`                           │
-///           V  and `AttemptPending` peers                           │
+///  │       ╱ ╲            filter by                                 │
+///  └─────▶▕   ▏     !maybe_connected_addr                           │
+///          ╲ ╱    to remove recent `Responded`,                     │
+///           V  `AttemptPending`, and `Failed` peers                 │
 ///           │                                                       │
 ///           │    try outbound connection,                           │
 ///           ▼ update last_attempted to now()                        │
@@ -208,16 +213,9 @@ where
                 Ok(Response::Peers(rsp_addrs)) => {
                     // Filter new addresses to ensure that gossiped addresses are actually new
                     let address_book = &self.address_book;
-                    // # Correctness
-                    //
-                    // Briefly hold the address book threaded mutex, each time we
-                    // check an address.
-                    //
-                    // TODO: reduce mutex contention by moving the filtering into
-                    //       the address book itself (#1976)
                     let new_addrs = rsp_addrs
                         .iter()
-                        .filter(|meta| !address_book.lock().unwrap().contains_addr(&meta.addr))
+                        .map(MetaAddr::new_gossiped_change)
                         .collect::<Vec<_>>();
                     trace!(
                         ?rsp_addrs,
@@ -231,10 +229,9 @@ where
                     //
                     // Briefly hold the address book threaded mutex, to extend
                     // the address list.
-                    address_book
-                        .lock()
-                        .unwrap()
-                        .extend(new_addrs.into_iter().cloned());
+                    //
+                    // Extend handles duplicate addresses internally.
+                    address_book.lock().unwrap().extend(new_addrs.into_iter());
                 }
                 Err(e) => {
                     // since we do a fanout, and new updates are triggered by
@@ -293,9 +290,8 @@ where
             // `None`. We only need to sleep before yielding an address.
             let reconnect = guard.reconnection_peers().next()?;
 
-            let reconnect = MetaAddr::new_reconnect(&reconnect.addr, &reconnect.services);
-            guard.update(reconnect);
-            reconnect
+            let reconnect = MetaAddr::update_attempt(&reconnect.addr);
+            guard.update(reconnect)?
         };
 
         // SECURITY: rate-limit new candidate connections
@@ -305,8 +301,8 @@ where
     }
 
     /// Mark `addr` as a failed peer.
-    pub fn report_failed(&mut self, addr: &MetaAddr) {
-        let addr = MetaAddr::new_errored(&addr.addr, &addr.services);
+    pub fn report_failed(&mut self, addr: &SocketAddr) {
+        let addr = MetaAddr::update_failed(&addr, &None);
         // # Correctness
         //
         // Briefly hold the address book threaded mutex, to update the state for

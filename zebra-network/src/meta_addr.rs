@@ -45,7 +45,7 @@ pub enum PeerAddrState {
     /// Alternate addresses are attempted after gossiped addresses.
     NeverAttemptedAlternate,
 
-    /// We just started a connection attempt to this peer.
+    /// We have started a connection attempt to this peer.
     AttemptPending {
         /// The last time we made an outbound attempt to this peer.
         /// See `get_last_attempt` for details.
@@ -205,6 +205,265 @@ impl PartialEq for PeerAddrState {
 
 impl Eq for PeerAddrState {}
 
+/// A change to a `MetaAddr` in an `AddressBook`.
+///
+/// Most `PeerAddrState`s have a corresponding `Change`.
+#[derive(Copy, Clone, Debug)]
+pub enum MetaAddrChange {
+    /// A new gossiped peer `MetaAddr`.
+    ///
+    /// `Addr` messages provide an address, services, and a last seen time.
+    /// The services can be updated by future handshakes with this peer.
+    /// The untrusted last seen time is overridden by any `last_success` time.
+    NewGossiped {
+        addr: SocketAddr,
+        services: PeerServices,
+        untrusted_last_seen: DateTime<Utc>,
+    },
+
+    /// A new alternate peer `MetaAddr`.
+    ///
+    /// `Version` messages provide the canonical address and its services.
+    /// The services can be updated by future handshakes with this peer.
+    ///
+    /// Sets the untrusted last seen time to the current time.
+    NewAlternate {
+        addr: SocketAddr,
+        services: PeerServices,
+    },
+
+    /// We have started a connection attempt to this peer.
+    ///
+    /// Sets the last attempt time to the current time.
+    UpdateAttempt { addr: SocketAddr },
+
+    /// A peer has sent us a message, after a successful handshake on an outbound
+    /// connection.
+    ///
+    /// The services are updated based on the handshake with this peer.
+    ///
+    /// Sets the last success time to the current time.
+    UpdateResponded {
+        addr: SocketAddr,
+        services: PeerServices,
+    },
+
+    /// A connection to this peer has failed.
+    ///
+    /// If the handshake with this peer succeeded, update its services.
+    ///
+    /// Sets the last failed time to the current time.
+    UpdateFailed {
+        addr: SocketAddr,
+        services: Option<PeerServices>,
+    },
+
+    /// A connection to this peer has shut down.
+    ///
+    /// If the handshake with this peer succeeded, update its services.
+    ///
+    /// If the peer is in the `Responded` state, do nothing.
+    /// Otherwise, mark the peer as `Failed`, and set the last failed time to the
+    /// current time.
+    UpdateShutdown {
+        addr: SocketAddr,
+        services: Option<PeerServices>,
+    },
+}
+
+impl MetaAddrChange {
+    /// Return the address for the change.
+    pub fn get_addr(&self) -> SocketAddr {
+        use MetaAddrChange::*;
+        match self {
+            NewGossiped { addr, .. } => *addr,
+            NewAlternate { addr, .. } => *addr,
+            UpdateAttempt { addr } => *addr,
+            UpdateResponded { addr, .. } => *addr,
+            UpdateFailed { addr, .. } => *addr,
+            UpdateShutdown { addr, .. } => *addr,
+        }
+    }
+
+    /// Return the services for the change, if available.
+    pub fn get_services(&self) -> Option<PeerServices> {
+        use MetaAddrChange::*;
+        match self {
+            NewGossiped { services, .. } => Some(*services),
+            NewAlternate { services, .. } => Some(*services),
+            UpdateAttempt { .. } => None,
+            UpdateResponded { services, .. } => Some(*services),
+            UpdateFailed { services, .. } => *services,
+            UpdateShutdown { services, .. } => *services,
+        }
+    }
+
+    /// Return the untrusted last seen time for the change, if available.
+    pub fn get_untrusted_last_seen(&self) -> Option<DateTime<Utc>> {
+        use MetaAddrChange::*;
+        match self {
+            NewGossiped {
+                untrusted_last_seen,
+                ..
+            } => Some(*untrusted_last_seen),
+            NewAlternate { .. }
+            | UpdateAttempt { .. }
+            | UpdateResponded { .. }
+            | UpdateFailed { .. }
+            | UpdateShutdown { .. } => None,
+        }
+    }
+
+    /// Is this address valid for outbound connections?
+    ///
+    /// `book_entry` is the entry for `self.get_addr()` in the address book.
+    pub fn is_valid_for_outbound(&self, book_entry: &Option<&MetaAddr>) -> bool {
+        if self.get_addr().ip().is_unspecified() || self.get_addr().port() == 0 {
+            false
+        } else {
+            let book_services = book_entry.map(|book| book.services);
+            // Use the latest services we have. Assume valid if we don't know.
+            self.get_services()
+                .or(book_services)
+                .map(|services| services.contains(PeerServices::NODE_NETWORK))
+                .unwrap_or(true)
+        }
+    }
+
+    /// Is this address a directly connected client?
+    ///
+    /// `book_entry` is the entry for `self.get_addr()` in the address book.
+    pub fn is_direct_client(&self, book_entry: &Option<&MetaAddr>) -> bool {
+        let book_services = book_entry.map(|book| book.services);
+        // Use the latest services we have. Assume server if we don't know.
+        self.get_services()
+            .or(book_services)
+            .map(|services| !services.contains(PeerServices::NODE_NETWORK))
+            .unwrap_or(false)
+    }
+
+    pub fn into_meta_addr(self, old_entry: &Option<&MetaAddr>) -> Option<MetaAddr> {
+        use MetaAddrChange::*;
+
+        let has_been_attempted = old_entry
+            .map(|old| old.has_been_attempted())
+            .unwrap_or(false);
+
+        match self {
+            // Skip the update if the peer has had a previous attempt
+            // Update services, but ignore updates to untrusted last seen
+            NewGossiped {
+                addr,
+                services,
+                untrusted_last_seen,
+            } if !has_been_attempted => Some(MetaAddr::new(
+                &addr,
+                &services,
+                &old_entry
+                    .map(|old| old.untrusted_last_seen)
+                    .unwrap_or(untrusted_last_seen),
+                &NeverAttemptedGossiped,
+            )),
+            NewAlternate { addr, services } if !has_been_attempted => Some(MetaAddr::new(
+                &addr,
+                &services,
+                &old_entry
+                    .map(|old| old.untrusted_last_seen)
+                    .unwrap_or_else(Utc::now),
+                &NeverAttemptedAlternate,
+            )),
+            NewGossiped { .. } | NewAlternate { .. } => None,
+            // Update last_attempt
+            // Panics if the peer does not have an existing entry
+            UpdateAttempt { addr } => {
+                if let Some(old_entry) = old_entry {
+                    Some(MetaAddr::new(
+                        &addr,
+                        &old_entry.services,
+                        &old_entry.untrusted_last_seen,
+                        &AttemptPending {
+                            last_attempt: Utc::now(),
+                            last_success: old_entry.get_last_success(),
+                            last_failed: old_entry.get_last_failed(),
+                        },
+                    ))
+                } else {
+                    panic!(
+                        "unexpected attempt before gossip or alternate: change: {:?} old: {:?}",
+                        self, old_entry
+                    )
+                }
+            }
+            // Update last_success and services
+            // Panics if the peer has not had an attempt
+            UpdateResponded { addr, services } => old_entry.map(|old_entry| {
+                MetaAddr::new(
+                    &addr,
+                    &services,
+                    &old_entry.untrusted_last_seen,
+                    &Responded {
+                        last_attempt: old_entry.get_last_attempt().unwrap_or_else(|| {
+                            panic!(
+                                "unexpected responded before attempt: change: {:?} old: {:?}",
+                                self, old_entry
+                            )
+                        }),
+                        last_success: Utc::now(),
+                        last_failed: old_entry.get_last_failed(),
+                    },
+                )
+            }),
+            // Update last_failed and services if present
+            // Panics if the peer has not had an attempt
+            UpdateFailed { addr, services } => old_entry.map(|old_entry| {
+                MetaAddr::new(
+                    &addr,
+                    &services.unwrap_or(old_entry.services),
+                    &old_entry.untrusted_last_seen,
+                    &Failed {
+                        last_attempt: old_entry.get_last_attempt().unwrap_or_else(|| {
+                            panic!(
+                                "unexpected failure before attempt: change: {:?} old: {:?}",
+                                self, old_entry
+                            )
+                        }),
+                        last_success: old_entry.get_last_success(),
+                        last_failed: Utc::now(),
+                    },
+                )
+            }),
+            UpdateShutdown { addr, services } => old_entry.map(|old_entry| {
+                if matches!(old_entry.last_connection_state, Responded { .. }) {
+                    // Update services if present
+                    MetaAddr::new(
+                        &addr,
+                        &services.unwrap_or(old_entry.services),
+                        &old_entry.untrusted_last_seen,
+                        &old_entry.last_connection_state,
+                    )
+                } else {
+                    // Update last_failed and services if present
+                    MetaAddr::new(
+                        &addr,
+                        &services.unwrap_or(old_entry.services),
+                        &old_entry.untrusted_last_seen,
+                        &Failed {
+                            last_attempt: old_entry.get_last_attempt().unwrap_or_else(|| {
+                                panic!(
+                                    "unexpected shutdown before attempt: change: {:?} old: {:?}",
+                                    self, old_entry
+                                )
+                            }),
+                            last_success: old_entry.get_last_success(),
+                            last_failed: Utc::now(),
+                        },
+                    )
+                }
+            }),
+        }
+    }
+}
+
 /// An address with metadata on its advertised services and last-seen time.
 ///
 /// [Bitcoin reference](https://en.bitcoin.it/wiki/Protocol_documentation#Network_address)
@@ -230,7 +489,9 @@ pub struct MetaAddr {
     ///
     /// `addr`s from non-`Responded` peers may be invalid due to outdated
     /// records, or buggy or malicious peers.
-    pub addr: SocketAddr,
+    //
+    // TODO: make the addr private to MetaAddr and AddressBook
+    pub(super) addr: SocketAddr,
 
     /// The services advertised by the peer.
     ///
@@ -249,7 +510,7 @@ pub struct MetaAddr {
     ///
     /// `services` from non-`Responded` peers may be invalid due to outdated
     /// records, older peer versions, or buggy or malicious peers.
-    pub services: PeerServices,
+    services: PeerServices,
 
     /// The last time another node claimed this peer was valid.
     ///
@@ -257,13 +518,45 @@ pub struct MetaAddr {
     untrusted_last_seen: DateTime<Utc>,
 
     /// The outcome of our most recent direct outbound connection to this peer.
-    pub last_connection_state: PeerAddrState,
+    //
+    // TODO: make the state private to MetaAddr and AddressBook
+    pub(super) last_connection_state: PeerAddrState,
 }
 
 impl MetaAddr {
-    /// Create a new `MetaAddr` from the deserialized fields in a gossiped
-    /// peer `Addr` message.
-    pub fn new_gossiped(
+    /// Create a new `MetaAddr` from its parts.
+    ///
+    /// This function should only be used by the `meta_addr` and `address_book`
+    /// modules. Other callers should use a more specific `MetaAddr` or
+    /// `MetaAddrChange` constructor.
+    fn new(
+        addr: &SocketAddr,
+        services: &PeerServices,
+        untrusted_last_seen: &DateTime<Utc>,
+        last_connection_state: &PeerAddrState,
+    ) -> MetaAddr {
+        MetaAddr {
+            addr: *addr,
+            services: *services,
+            untrusted_last_seen: *untrusted_last_seen,
+            last_connection_state: *last_connection_state,
+        }
+    }
+
+    /// Add or update an `AddressBook` entry, based on a gossiped peer `Addr`
+    /// message.
+    pub fn new_gossiped_change(meta_addr: &MetaAddr) -> MetaAddrChange {
+        assert!(meta_addr.last_connection_state == NeverAttemptedGossiped);
+        MetaAddrChange::NewGossiped {
+            addr: meta_addr.addr,
+            services: meta_addr.services,
+            untrusted_last_seen: meta_addr.untrusted_last_seen,
+        }
+    }
+
+    /// Create a new gossiped `MetaAddr`, based on the deserialized fields from
+    /// a peer `Addr` message.
+    pub fn new_gossiped_meta_addr(
         addr: &SocketAddr,
         services: &PeerServices,
         untrusted_last_seen: &DateTime<Utc>,
@@ -272,12 +565,26 @@ impl MetaAddr {
             addr: *addr,
             services: *services,
             untrusted_last_seen: *untrusted_last_seen,
-            // the state is Zebra-specific, it isn't part of the Zcash network protocol
             last_connection_state: NeverAttemptedGossiped,
         }
     }
 
-    /// Create a new `MetaAddr` for a peer that has just `Responded`.
+    /// Add or update an `AddressBook` entry, based on the canonical address in a
+    /// peer's `Version` message.
+    pub fn new_alternate(addr: &SocketAddr, services: &PeerServices) -> MetaAddrChange {
+        MetaAddrChange::NewAlternate {
+            addr: *addr,
+            services: *services,
+        }
+    }
+
+    /// Update an `AddressBook` entry when we start connecting to a peer.
+    pub fn update_attempt(addr: &SocketAddr) -> MetaAddrChange {
+        MetaAddrChange::UpdateAttempt { addr: *addr }
+    }
+
+    /// Update an `AddressBook` entry when a peer sends a message after a
+    /// successful handshake.
     ///
     /// # Security
     ///
@@ -288,76 +595,37 @@ impl MetaAddr {
     /// - malicious peers could interfere with other peers' `AddressBook` state,
     ///   or
     /// - Zebra could advertise unreachable addresses to its own peers.
-    pub fn new_responded(addr: &SocketAddr, services: &PeerServices) -> MetaAddr {
-        MetaAddr {
+    pub fn update_responded(addr: &SocketAddr, services: &PeerServices) -> MetaAddrChange {
+        MetaAddrChange::UpdateResponded {
             addr: *addr,
             services: *services,
-            untrusted_last_seen: (),
-            last_connection_state: Responded {
-                last_attempt: (),
-                last_success: Utc::now(),
-                last_failed: (),
-            },
         }
     }
 
-    /// Create a new `MetaAddr` for a peer that we want to reconnect to.
-    pub fn new_reconnect(addr: &SocketAddr, services: &PeerServices) -> MetaAddr {
-        MetaAddr {
-            addr: *addr,
-            services: (),
-            untrusted_last_seen: (),
-            last_connection_state: AttemptPending {
-                last_attempt: Utc::now(),
-                last_success: (),
-                last_failed: (),
-            },
-        }
-    }
-
-    /// Create a new `MetaAddr` for a peer's alternate address, received via a
-    /// `Version` message.
-    pub fn new_alternate(addr: &SocketAddr, services: &PeerServices) -> MetaAddr {
-        MetaAddr {
+    /// Update an `AddressBook` entry when a peer connection fails.
+    pub fn update_failed(addr: &SocketAddr, services: &Option<PeerServices>) -> MetaAddrChange {
+        MetaAddrChange::UpdateFailed {
             addr: *addr,
             services: *services,
-            untrusted_last_seen: Utc::now(),
-            last_connection_state: NeverAttemptedAlternate,
         }
     }
 
-    /// Create a new `MetaAddr` for a peer that has just had an error.
-    pub fn new_errored(addr: &SocketAddr, services: &PeerServices) -> MetaAddr {
-        MetaAddr {
+    /// Update an `AddressBook` entry when a peer connection shuts down.
+    pub fn update_shutdown(addr: &SocketAddr, services: &Option<PeerServices>) -> MetaAddrChange {
+        MetaAddrChange::UpdateShutdown {
             addr: *addr,
-            services: (),
-            untrusted_last_seen: (),
-            last_connection_state: Failed {
-                last_attempt: (),
-                last_success: (),
-                last_failed: Utc::now(),
-            },
+            services: *services,
         }
     }
 
-    /// Create a new `MetaAddr` for a peer that has just shut down.
-    pub fn new_shutdown(addr: &SocketAddr, services: &PeerServices) -> MetaAddr {
-        // TODO: should we preserve the state of `Responded` peers that shut down?
-        MetaAddr::new_errored(addr, services)
-    }
-
-    /// Create a new `MetaAddr` for our own listener address.
-    pub fn new_local_listener(addr: &SocketAddr) -> MetaAddr {
-        MetaAddr {
+    /// Add or update our local listener address in an `AddressBook`.
+    ///
+    /// See `AddressBook::get_local_listener` for details.
+    pub fn new_local_listener(addr: &SocketAddr) -> MetaAddrChange {
+        MetaAddrChange::NewAlternate {
             addr: *addr,
             // TODO: create a "local services" constant
             services: PeerServices::NODE_NETWORK,
-            untrusted_last_seen: Utc::now(),
-            last_connection_state: Responded {
-                last_attempt: Utc::now(),
-                last_success: Utc::now(),
-                last_failed: None,
-            },
         }
     }
 
@@ -426,7 +694,12 @@ impl MetaAddr {
 
         Utc.timestamp_opt(seconds, 0)
             .single()
-            .expect("all u32 values are valid")
+            .expect("unexpected invalid time: all u32 values should be valid")
+    }
+
+    /// Has this peer ever been attempted?
+    pub fn has_been_attempted(&self) -> bool {
+        self.get_last_attempt().is_some()
     }
 
     /// Is this address a directly connected client?
@@ -548,7 +821,7 @@ impl ZcashDeserialize for MetaAddr {
         let services = PeerServices::from_bits_truncate(reader.read_u64::<LittleEndian>()?);
         let addr = reader.read_socket_addr()?;
 
-        Ok(MetaAddr::new_gossiped(
+        Ok(MetaAddr::new_gossiped_meta_addr(
             &addr,
             &services,
             &untrusted_last_seen,
