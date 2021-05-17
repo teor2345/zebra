@@ -21,14 +21,19 @@ use tracing::Span;
 use tracing_futures::Instrument;
 
 use crate::{
-    constants, meta_addr::MetaAddr, peer, timestamp_collector::TimestampCollector, AddressBook,
-    BoxError, Config, Request, Response,
+    constants,
+    meta_addr::{MetaAddr, MetaAddrChange},
+    peer,
+    timestamp_collector::TimestampCollector,
+    types::PeerServices,
+    AddressBook, BoxError, Config, Request, Response,
 };
 
 use zebra_chain::parameters::Network;
 
 use super::CandidateSet;
 use super::PeerSet;
+use chrono::Utc;
 use peer::Client;
 
 type PeerChange = Result<Change<SocketAddr, peer::Client>, BoxError>;
@@ -74,12 +79,11 @@ where
     let (listen_handshaker, outbound_connector) = {
         use tower::timeout::TimeoutLayer;
         let hs_timeout = TimeoutLayer::new(constants::HANDSHAKE_TIMEOUT);
-        use crate::protocol::external::types::PeerServices;
         let hs = peer::Handshake::builder()
             .with_config(config.clone())
             .with_inbound_service(inbound_service)
             .with_inventory_collector(inv_sender)
-            .with_timestamp_collector(timestamp_collector)
+            .with_timestamp_collector(timestamp_collector.clone())
             .with_advertised_services(PeerServices::NODE_NETWORK)
             .with_user_agent(crate::constants::USER_AGENT.to_string())
             .want_transactions(true)
@@ -141,12 +145,19 @@ where
     let initial_peers_fut = {
         let config = config.clone();
         let outbound_connector = outbound_connector.clone();
+        let timestamp_collector = timestamp_collector.clone();
         let peerset_tx = peerset_tx.clone();
         async move {
             let initial_peers = config.initial_peers().await;
             let _ = initial_peer_count_tx.send(initial_peers.len());
             // Connect the tx end to the 3 peer sources:
-            add_initial_peers(initial_peers, outbound_connector, peerset_tx).await
+            add_initial_peers(
+                initial_peers,
+                outbound_connector,
+                timestamp_collector,
+                peerset_tx,
+            )
+            .await
         }
         .boxed()
     };
@@ -189,12 +200,20 @@ where
 }
 
 /// Use the provided `handshaker` to connect to `initial_peers`, then send
-/// the results over `tx`.
-#[instrument(skip(initial_peers, outbound_connector, tx))]
+/// the results over `peer_set_sender`.
+///
+/// Updates the `AddressBook` using `timestamp_collector`.
+#[instrument(skip(
+    initial_peers,
+    outbound_connector,
+    timestamp_collector,
+    peer_set_sender
+))]
 async fn add_initial_peers<S>(
     initial_peers: std::collections::HashSet<SocketAddr>,
     outbound_connector: S,
-    mut tx: mpsc::Sender<PeerChange>,
+    mut timestamp_collector: mpsc::Sender<MetaAddrChange>,
+    mut peer_set_sender: mpsc::Sender<PeerChange>,
 ) -> Result<(), BoxError>
 where
     S: Service<SocketAddr, Response = Change<SocketAddr, peer::Client>, Error = BoxError> + Clone,
@@ -203,10 +222,11 @@ where
     info!(?initial_peers, "connecting to initial peer set");
     // ## Correctness:
     //
-    // Each `CallAll` can hold one `Buffer` or `Batch` reservation for
-    // an indefinite period. We can use `CallAllUnordered` without filling
+    // Each `FuturesUnordered` can hold one `Buffer` or `Batch` reservation for
+    // an indefinite period. We can use `FuturesUnordered` without filling
     // the underlying `Inbound` buffer, because we immediately drive this
-    // single `CallAll` to completion, and handshakes have a short timeout.
+    // single `FuturesUnordered` to completion, and handshakes have a short
+    // timeout.
     let mut handshakes: FuturesUnordered<_> = initial_peers
         .into_iter()
         .map(|addr| {
@@ -222,7 +242,9 @@ where
         if let Err((addr, ref e)) = handshake_result {
             info!(?addr, ?e, "an initial peer connection failed");
         }
-        tx.send(handshake_result.map_err(|(_addr, e)| e)).await?;
+        peer_set_sender
+            .send(handshake_result.map_err(|(_addr, e)| e))
+            .await?;
     }
 
     Ok(())

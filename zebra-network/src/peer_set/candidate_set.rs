@@ -251,9 +251,10 @@ where
     /// - oldest `Responded` that are not live
     /// - newest `NeverAttemptedGossiped`
     /// - newest `NeverAttemptedAlternate`
-    /// - oldest `Failed`
+    /// - oldest `Failed` that are not recent
+    /// - oldest `AttemptPending` that are not recent
     ///
-    /// Skips `AttemptPending` peers and live `Responded` peers.
+    /// Skips peers that have recently been attempted, connected, or failed.
     ///
     /// ## Correctness
     ///
@@ -261,7 +262,7 @@ where
     /// become `Failed` if they time out or provide a bad response.
     ///
     /// Live `Responded` peers will stay live if they keep responding, or
-    /// become a reconnection candidate if they stop responding.
+    /// become a connection candidate if they stop responding.
     ///
     /// ## Security
     ///
@@ -284,20 +285,20 @@ where
         //
         // To avoid hangs, any computation in the critical section should
         // be kept to a minimum.
-        let reconnect = {
+        let connect = {
             let mut guard = self.address_book.lock().unwrap();
             // It's okay to return without sleeping here, because we're returning
             // `None`. We only need to sleep before yielding an address.
-            let reconnect = guard.reconnection_peers().next()?;
+            let connect = guard.next_attempt_peer()?;
 
-            let reconnect = MetaAddr::update_attempt(&reconnect.addr);
-            guard.update(reconnect)?
+            let connect = MetaAddr::update_attempt(&connect.addr);
+            guard.update(connect)?
         };
 
         // SECURITY: rate-limit new candidate connections
         sleep.await;
 
-        Some(reconnect)
+        Some(connect)
     }
 
     /// Mark `addr` as a failed peer.
