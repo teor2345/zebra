@@ -220,7 +220,22 @@ where
     S::Future: Send + 'static,
 {
     info!(?initial_peers, "connecting to initial peer set");
-    // ## Correctness:
+
+    // Add the DNS seeder peers to the address book, in the `AttemptPending` state
+    for addr in initial_peers.iter() {
+        // Treat DNS seeder peers like gossiped peers, but fill in defaults as needed
+        // TODO: make unique State or Change variants for DNS seeder peers?
+        let meta_addr =
+            MetaAddr::new_gossiped_meta_addr(&addr, &PeerServices::NODE_NETWORK, &Utc::now());
+        let _ = timestamp_collector
+            .send(MetaAddr::new_gossiped_change(&meta_addr))
+            .await;
+        let _ = timestamp_collector
+            .send(MetaAddr::update_attempt(&addr))
+            .await;
+    }
+
+    // # Correctness
     //
     // Each `FuturesUnordered` can hold one `Buffer` or `Batch` reservation for
     // an indefinite period. We can use `FuturesUnordered` without filling
@@ -228,11 +243,11 @@ where
     // single `FuturesUnordered` to completion, and handshakes have a short
     // timeout.
     let mut handshakes: FuturesUnordered<_> = initial_peers
-        .into_iter()
+        .iter()
         .map(|addr| {
             outbound_connector
                 .clone()
-                .oneshot(addr)
+                .oneshot(*addr)
                 .map_err(move |e| (addr, e))
         })
         .collect();
