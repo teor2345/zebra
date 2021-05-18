@@ -142,7 +142,7 @@ where
     ///
     /// See `update_initial` for details.
     pub async fn update(&mut self) -> Result<(), BoxError> {
-        self.update_inner(None).await
+        self.update_timeout(None).await
     }
 
     /// Update the peer set from the network, limiting the fanout to
@@ -167,14 +167,42 @@ where
     ///
     /// `next` puts peers into the `AttemptPending` state.
     pub async fn update_initial(&mut self, fanout_limit: usize) -> Result<(), BoxError> {
-        self.update_inner(Some(fanout_limit)).await
+        self.update_timeout(Some(fanout_limit)).await
+    }
+
+    /// Update the peer set from the network, limiting the fanout to
+    /// `fanout_limit`, and imposing a timeout on the entire fanout.
+    ///
+    /// See `update_initial` for details.
+    async fn update_timeout(&mut self, fanout_limit: Option<usize>) -> Result<(), BoxError> {
+        // CORRECTNESS
+        //
+        // Use a timeout to avoid deadlocks when there are no connected
+        // peers, and:
+        // - we're waiting on a handshake to complete so there are peers, or
+        // - another task that handles or adds peers is waiting on this task
+        //   to complete.
+        if let Ok(fanout_result) =
+            timeout(constants::REQUEST_TIMEOUT, self.update_fanout(fanout_limit)).await
+        {
+            fanout_result?;
+        } else {
+            // update must only return an error for permanent failures
+            info!("timeout waiting for the peer service to become ready");
+        }
+
+        Ok(())
     }
 
     /// Update the peer set from the network, limiting the fanout to
     /// `fanout_limit`.
     ///
     /// See `update_initial` for details.
-    async fn update_inner(&mut self, fanout_limit: Option<usize>) -> Result<(), BoxError> {
+    ///
+    /// # Correctness
+    ///
+    /// This function does not have a timeout. Use `update_timeout` instead.
+    async fn update_fanout(&mut self, fanout_limit: Option<usize>) -> Result<(), BoxError> {
         // Opportunistically crawl the network on every update call to ensure
         // we're actively fetching peers. Continue independently of whether we
         // actually receive any peers, but always ask the network for more.
@@ -188,53 +216,20 @@ where
             .map(|fanout_limit| min(fanout_limit, constants::GET_ADDR_FANOUT))
             .unwrap_or(constants::GET_ADDR_FANOUT);
         debug!(?fanout_limit, "sending GetPeers requests");
+        // TODO: launch each fanout in its own task (might require tokio 1.6)
         for _ in 0..fanout_limit {
-            // CORRECTNESS
-            //
-            // Use a timeout to avoid deadlocks when there are no connected
-            // peers, and:
-            // - we're waiting on a handshake to complete so there are peers, or
-            // - another task that handles or adds peers is waiting on this task
-            //   to complete.
-            let peer_service =
-                match timeout(constants::REQUEST_TIMEOUT, self.peer_service.ready_and()).await {
-                    // update must only return an error for permanent failures
-                    Err(temporary_error) => {
-                        info!(
-                            ?temporary_error,
-                            "timeout waiting for the peer service to become ready"
-                        );
-                        return Ok(());
-                    }
-                    Ok(Err(permanent_error)) => Err(permanent_error)?,
-                    Ok(Ok(peer_service)) => peer_service,
-                };
+            let peer_service = self.peer_service.ready_and().await?;
             responses.push(peer_service.call(Request::Peers));
         }
         while let Some(rsp) = responses.next().await {
             match rsp {
-                Ok(Response::Peers(rsp_addrs)) => {
-                    // Filter new addresses to ensure that gossiped addresses are actually new
-                    let address_book = &self.address_book;
-                    let new_addrs = rsp_addrs
-                        .iter()
-                        .map(MetaAddr::new_gossiped_change)
-                        .collect::<Vec<_>>();
+                Ok(Response::Peers(addrs)) => {
                     trace!(
-                        ?rsp_addrs,
-                        new_addr_count = ?new_addrs.len(),
+                        addr_count = ?addrs.len(),
+                        ?addrs,
                         "got response to GetPeers"
                     );
-
-                    // `MetaAddr`s are deserialized in the `NeverAttemptedGossiped` state
-                    //
-                    // # Correctness
-                    //
-                    // Briefly hold the address book threaded mutex, to extend
-                    // the address list.
-                    //
-                    // Extend handles duplicate addresses internally.
-                    address_book.lock().unwrap().extend(new_addrs.into_iter());
+                    self.process_addrs(addrs);
                 }
                 Err(e) => {
                     // since we do a fanout, and new updates are triggered by
@@ -246,6 +241,22 @@ where
         }
 
         Ok(())
+    }
+
+    /// Add new `addrs` to the address book.
+    fn process_addrs(&self, addrs: impl IntoIterator<Item = MetaAddr>) {
+        // Turn the addresses into "new gossiped" changes
+        let addrs = addrs
+            .into_iter()
+            .map(|addr| MetaAddr::new_gossiped_change(&addr));
+
+        // # Correctness
+        //
+        // Briefly hold the address book threaded mutex, to extend
+        // the address list.
+        //
+        // Extend handles duplicate addresses internally.
+        self.address_book.lock().unwrap().extend(addrs);
     }
 
     /// Returns the next candidate for a connection attempt, if any are available.
