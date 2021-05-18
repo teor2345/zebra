@@ -14,7 +14,7 @@ use futures::{
 };
 use tokio::{
     net::TcpListener,
-    sync::broadcast,
+    sync::{broadcast, watch},
     time::{error::Elapsed, timeout, Instant},
 };
 use tower::{
@@ -144,8 +144,10 @@ where
             .instrument(Span::current()),
     );
 
-    // 2. Initial peers, specified in the config.
-    let (initial_peer_count_tx, initial_peer_count_rx) = tokio::sync::oneshot::channel();
+    // 2. Initial peer connections, as specified in the config.
+
+    // Share the number of successful initial peers with the candidate set updater
+    let (initial_success_count_tx, mut initial_success_count_rx) = tokio::sync::watch::channel(0);
     let initial_peers_fut = {
         let config = config.clone();
         let outbound_connector = outbound_connector.clone();
@@ -153,13 +155,13 @@ where
         let peerset_tx = peerset_tx.clone();
         async move {
             let initial_peers = config.initial_peers().await;
-            let _ = initial_peer_count_tx.send(initial_peers.len());
             // Connect the tx end to the 3 peer sources:
             add_initial_peers(
                 initial_peers,
                 outbound_connector,
                 timestamp_collector,
                 peerset_tx,
+                initial_success_count_tx,
             )
             .await
         }
@@ -175,11 +177,15 @@ where
     // `addr` message per connection, and if we only have one initial peer we
     // need to ensure that its `addr` message is used by the crawler.
 
-    info!(candidates = ?candidates.candidate_peer_count(),
-          recent = ?candidates.recent_peer_count(),
+    info!("waiting for a successful initial peer connection");
+    // it doesn't matter if the sender has been dropped
+    let _ = initial_success_count_rx.changed().await;
+    info!(initial_successes = ?*initial_success_count_rx.borrow(),
+          candidates = ?candidates.candidate_peer_count(),
+          excluded_recent = ?candidates.recent_peer_count(),
           "asking initial peers for new peers");
     let _ = candidates
-        .update_initial(initial_peer_count_rx.await.expect("value sent before drop"))
+        .update_initial(*initial_success_count_rx.borrow())
         .await;
 
     for _ in 0..config.peerset_initial_target_size {
@@ -205,16 +211,24 @@ where
     (peer_set, address_book)
 }
 
-/// Use the provided `handshaker` to connect to `initial_peers`, then send
-/// the results over `peerset_tx`.
+/// Use the provided `outbound_connector` to connect to `initial_peers`, then
+/// send the results over `peerset_tx`.
 ///
-/// Updates the `AddressBook` using `timestamp_collector`.
-#[instrument(skip(initial_peers, outbound_connector, timestamp_collector, peerset_tx))]
+/// Also adds those peers to the `AddressBook` using `timestamp_collector`,
+/// and updates `success_count_tx` with the number of successful peers.
+#[instrument(skip(
+    initial_peers,
+    outbound_connector,
+    timestamp_collector,
+    peerset_tx,
+    success_count_tx
+))]
 async fn add_initial_peers<C>(
     initial_peers: std::collections::HashSet<SocketAddr>,
     outbound_connector: C,
     mut timestamp_collector: mpsc::Sender<MetaAddrChange>,
     mut peerset_tx: mpsc::Sender<PeerChange>,
+    success_count_tx: watch::Sender<usize>,
 ) -> Result<(), BoxError>
 where
     C: Service<SocketAddr, Response = Change<SocketAddr, peer::Client>, Error = BoxError>
@@ -280,23 +294,40 @@ where
         handshakes.push(Box::pin(hs_join));
     }
 
+    // TODO: replace with *success_count_tx.borrow() in Tokio 1.6
+    let mut success_count = 0;
     while let Some(handshake_action) = handshakes.next().await {
         use CrawlerAction::*;
         match handshake_action {
             HandshakeConnected { peer_set_change } => {
+                success_count += 1;
                 if let Change::Insert(ref addr, _) = peer_set_change {
-                    debug!(?addr, "successfully dialed initial peer");
+                    debug!(?addr, ?success_count, "successfully dialed initial peer");
                 } else {
                     unreachable!("unexpected handshake result: all changes should be Insert");
                 }
                 // the peer set is handled by an independent task, so this send
                 // shouldn't hang
                 peerset_tx.send(Ok(peer_set_change)).await?;
+                // if the receiver has been dropped, we still want to process
+                // the handshakes
+                let _ = success_count_tx.send(success_count);
             }
             HandshakeFailed { failed_addr, error } => {
-                // this creates verbose logs, but it's better than just hanging on
-                // startup with no output
-                info!(addr = ?failed_addr.addr, ?error, "an initial peer connection failed");
+                if success_count <= constants::GET_ADDR_FANOUT {
+                    // this creates verbose logs, but it's better than just hanging on
+                    // startup with no output
+                    info!(addr = ?failed_addr.addr,
+                      ?error,
+                      ?success_count,
+                      "an initial peer connection failed");
+                } else {
+                    // switch to debug when we have enough peers
+                    debug!(addr = ?failed_addr.addr,
+                      ?error,
+                      ?success_count,
+                      "an initial peer connection failed");
+                }
                 let _ = timestamp_collector
                     .send(MetaAddr::update_failed(&failed_addr.addr, &None))
                     .await;
@@ -308,10 +339,20 @@ where
         }
     }
 
-    info!(
-        ?initial_peers_len,
-        "finished connection attempts to initial peer set"
-    );
+    if success_count > 0 {
+        info!(
+            ?success_count,
+            ?initial_peers_len,
+            "finished connection attempts to initial peer set"
+        );
+    } else {
+        warn!(
+            ?initial_peers_len,
+            "no successful initial peer connections, starting crawler anyway"
+        );
+        // this redundant update will start the crawler
+        let _ = success_count_tx.send(success_count);
+    }
 
     Ok(())
 }

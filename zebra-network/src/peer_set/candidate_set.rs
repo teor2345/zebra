@@ -1,4 +1,4 @@
-use std::{mem, net::SocketAddr, sync::Arc, time::Duration};
+use std::{cmp::min, mem, net::SocketAddr, sync::Arc, time::Duration};
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::time::{sleep, sleep_until, timeout, Sleep};
@@ -184,8 +184,11 @@ where
         // existing peers, but we don't make too many because update may be
         // called while the peer set is already loaded.
         let mut responses = FuturesUnordered::new();
-        trace!("sending GetPeers requests");
-        for _ in 0..fanout_limit.unwrap_or(constants::GET_ADDR_FANOUT) {
+        let fanout_limit = fanout_limit
+            .map(|fanout_limit| min(fanout_limit, constants::GET_ADDR_FANOUT))
+            .unwrap_or(constants::GET_ADDR_FANOUT);
+        debug!(?fanout_limit, "sending GetPeers requests");
+        for _ in 0..fanout_limit {
             // CORRECTNESS
             //
             // Use a timeout to avoid deadlocks when there are no connected
