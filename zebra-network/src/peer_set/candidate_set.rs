@@ -289,7 +289,7 @@ where
             let mut guard = self.address_book.lock().unwrap();
             // It's okay to return without sleeping here, because we're returning
             // `None`. We only need to sleep before yielding an address.
-            let connect = guard.next_attempt_peer()?;
+            let connect = guard.next_candidate_peer()?;
 
             let connect = MetaAddr::update_attempt(&connect.addr);
             guard.update(connect)?
@@ -309,5 +309,29 @@ where
         // Briefly hold the address book threaded mutex, to update the state for
         // a single address.
         self.address_book.lock().unwrap().update(addr);
+    }
+
+    /// Return the number of candidate peers.
+    ///
+    /// This number can change over time as recently used peers expire.
+    pub fn candidate_peer_count(&self) -> usize {
+        // # Correctness
+        //
+        // Briefly hold the address book threaded mutex.
+        self.address_book.lock().unwrap().candidate_peer_count()
+    }
+
+    /// Return the number of recently used peers.
+    ///
+    /// This number can change over time as recently used peers expire.
+    pub fn recent_peer_count(&self) -> usize {
+        // # Correctness
+        //
+        // Briefly hold the address book threaded mutex.
+        self.address_book
+            .lock()
+            .unwrap()
+            .recently_used_peers()
+            .count()
     }
 }

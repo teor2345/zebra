@@ -166,7 +166,7 @@ where
         .boxed()
     };
 
-    let add_guard = tokio::spawn(initial_peers_fut.instrument(Span::current()));
+    let initial_peers_guard = tokio::spawn(initial_peers_fut.instrument(Span::current()));
 
     // 3. Outgoing peers we connect to in response to load.
     let mut candidates = CandidateSet::new(address_book.clone(), peer_set.clone());
@@ -175,7 +175,9 @@ where
     // `addr` message per connection, and if we only have one initial peer we
     // need to ensure that its `addr` message is used by the crawler.
 
-    info!("Sending initial request for peers");
+    info!(candidates = ?candidates.candidate_peer_count(),
+          recent = ?candidates.recent_peer_count(),
+          "asking initial peers for new peers");
     let _ = candidates
         .update_initial(initial_peer_count_rx.await.expect("value sent before drop"))
         .await;
@@ -197,7 +199,7 @@ where
     );
 
     handle_tx
-        .send(vec![add_guard, listen_guard, crawl_guard])
+        .send(vec![initial_peers_guard, listen_guard, crawl_guard])
         .unwrap();
 
     (peer_set, address_book)
@@ -221,7 +223,12 @@ where
         + 'static,
     C::Future: Send + 'static,
 {
-    info!(?initial_peers, "connecting to initial peer set");
+    let initial_peers_len = initial_peers.len();
+    info!(
+        ?initial_peers_len,
+        ?initial_peers,
+        "connecting to initial peer set"
+    );
 
     // Add the DNS seeder peers to the address book, in the `AttemptPending` state.
     let mut initial_meta_addr = Vec::new();
@@ -300,6 +307,11 @@ where
             }
         }
     }
+
+    info!(
+        ?initial_peers_len,
+        "finished connection attempts to initial peer set"
+    );
 
     Ok(())
 }
@@ -423,6 +435,10 @@ where
     //   progress independently (and avoid deadlocking each other)
     // - use the `select!` macro for all actions, because the `select` function
     //   is biased towards the first ready future
+
+    info!(candidates = ?candidates.candidate_peer_count(),
+          recent = ?candidates.recent_peer_count(),
+          "starting the peer crawler");
 
     let mut handshakes = FuturesUnordered::new();
     // <FuturesUnordered as Stream> returns None when empty.

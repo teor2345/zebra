@@ -318,15 +318,32 @@ impl AddressBook {
             .cloned()
     }
 
-    /// Return the next peer that is due for a connection attempt.
-    pub fn next_attempt_peer(&self) -> Option<MetaAddr> {
+    /// Return an iterator over candidate peers, in arbitrary order.
+    ///
+    /// Candidate peers have not had recent attempts, successes, or failures.
+    fn candidate_peers(&'_ self) -> impl Iterator<Item = MetaAddr> + '_ {
         let _guard = self.span.enter();
 
         // Skip recently used peers (including live peers)
         self.peers_unordered()
             .filter(move |peer| !self.recently_used_addr(&peer.addr))
-            .min()
             .cloned()
+    }
+
+    /// Return the next peer that is due for a connection attempt.
+    pub fn next_candidate_peer(&self) -> Option<MetaAddr> {
+        let _guard = self.span.enter();
+
+        self.candidate_peers().min()
+    }
+
+    /// Return the number of candidate peers.
+    ///
+    /// This number can change over time as recently used peers expire.
+    pub fn candidate_peer_count(&self) -> usize {
+        let _guard = self.span.enter();
+
+        self.candidate_peers().count()
     }
 
     /// Returns the number of entries in this address book.

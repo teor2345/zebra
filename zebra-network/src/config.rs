@@ -72,6 +72,7 @@ impl Config {
             return HashSet::new();
         }
 
+        info!(config_peers_len = peers.len(), config_peers = ?peers, "resolving configured peers");
         loop {
             // We retry each peer individually, as well as retrying if there are
             // no peers in the combined list. DNS failures are correlated, so all
