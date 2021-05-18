@@ -12,7 +12,11 @@ use futures::{
     stream::{FuturesUnordered, StreamExt},
     TryFutureExt,
 };
-use tokio::{net::TcpListener, sync::broadcast, time::Instant};
+use tokio::{
+    net::TcpListener,
+    sync::broadcast,
+    time::{error::Elapsed, timeout, Instant},
+};
 use tower::{
     buffer::Buffer, discover::Change, layer::Layer, load::peak_ewma::PeakEwmaDiscover,
     util::BoxService, Service, ServiceExt,
@@ -346,7 +350,7 @@ where
             let mut tx2 = tx.clone();
             tokio::spawn(
                 async move {
-                    if let Ok(client) = handshake.await {
+                    if let Ok(Ok(client)) = timeout(constants::HANDSHAKE_TIMEOUT, handshake).await {
                         let _ = tx2.send(Ok(Change::Insert(addr, client))).await;
                     }
                 }
@@ -552,23 +556,46 @@ where
         .expect("outbound connector never errors");
 
     // the handshake has timeouts, so it shouldn't hang
-    outbound_connector
-        .call(candidate.addr)
-        .map_err(|e| (candidate, e))
-        .map(Into::into)
-        .await
+    timeout(
+        constants::HANDSHAKE_TIMEOUT,
+        outbound_connector
+            .call(candidate.addr)
+            .map_err(|e| (candidate, e))
+            .map(Into::into),
+    )
+    .map_err(|e| (candidate, e))
+    .map(Into::into)
+    .await
 }
 
+/// Convert from a connector result to a Crawler action
 impl From<Result<Change<SocketAddr, Client>, (MetaAddr, BoxError)>> for CrawlerAction {
-    fn from(dial_result: Result<Change<SocketAddr, Client>, (MetaAddr, BoxError)>) -> Self {
+    fn from(connector_result: Result<Change<SocketAddr, Client>, (MetaAddr, BoxError)>) -> Self {
         use CrawlerAction::*;
-        match dial_result {
+        match connector_result {
             Ok(peer_set_change) => HandshakeConnected { peer_set_change },
             Err((candidate, e)) => {
                 debug!(addr = ?candidate.addr, ?e, "failed to connect to candidate");
                 HandshakeFailed {
                     failed_addr: candidate,
                     error: e,
+                }
+            }
+        }
+    }
+}
+
+/// Convert from a timeout(connector) result to a Crawler action
+impl From<Result<CrawlerAction, (MetaAddr, Elapsed)>> for CrawlerAction {
+    fn from(timeout_result: Result<CrawlerAction, (MetaAddr, Elapsed)>) -> Self {
+        use CrawlerAction::*;
+        match timeout_result {
+            Ok(crawler_action) => crawler_action,
+            Err((candidate, e)) => {
+                debug!(addr = ?candidate.addr, ?e, "timeout when connecting to candidate");
+                HandshakeFailed {
+                    failed_addr: candidate,
+                    error: e.into(),
                 }
             }
         }
