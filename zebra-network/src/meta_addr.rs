@@ -43,6 +43,8 @@ mod tests;
 /// To avoid depending on untrusted or default data, Zebra tracks the required
 /// and optional data in each state. State updates are applied using
 /// [`MetaAddrChange`]s.
+///
+/// See the [`CandidateSet`] for a detailed peer state diagram.
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub enum PeerAddrState {
@@ -425,6 +427,8 @@ impl Eq for PeerAddrState {}
 ///   existing address book entry.
 /// The `UpdateShutdown` preserves the `Responded` state, but changes all
 /// other states to `Failed`.
+///
+/// See the [`CandidateSet`] for a detailed peer state diagram.
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub enum MetaAddrChange {
