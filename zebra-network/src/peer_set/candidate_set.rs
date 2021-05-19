@@ -13,11 +13,13 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///
 /// 1. `Responded` peers, which we previously had outbound connections to.
 /// 2. `NeverAttemptedGossiped` peers, which we learned about from other peers
-///    or a DNS seeder, but have never connected to;
+///     but have never connected to;
 /// 3. `NeverAttemptedAlternate` peers, which we learned from the `Version`
 ///     messages of directly connected peers, but have never connected to;
-/// 4. `Failed` peers, to whom we attempted to connect but were unable to;
-/// 5. `AttemptPending` peers, which we've recently queued for reconnection.
+/// 4. `NeverAttemptedDnsSeeder` peers, which we learned about from a DNS
+///     seeder, but have never connected to;
+/// 5. `Failed` peers, to whom we attempted to connect but were unable to;
+/// 6. `AttemptPending` peers, which we've recently queued for a connection.
 ///
 /// Never attempted peers are always available for connection.
 ///
@@ -32,9 +34,17 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///                         │     PeerSet      │
 ///                         │GetPeers Responses│
 ///                         └──────────────────┘
+///                                  │      provides 
+///                                  │ untrusted_last_seen
 ///                                  │
 ///                                  │
-///                                  │
+///    ┌──────────────────┐          │          ┌──────────────────┐ 
+///    │     Inbound      │          │          │       DNS        │
+///    │    Canonical     │──────────┼──────────│      Seeder      │
+///    │    Addresses     │          │          │    Addresses     │
+///    └──────────────────┘          │          └──────────────────┘
+///          provides                │
+///     untrusted_last_seen          │
 ///                                  │
 ///                                  ▼
 ///             filter by            Λ
@@ -43,20 +53,13 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///  │                              ╲ ╱
 ///  │                               V
 ///  │                               │
-///  │                               │
-///  │                               │
-///  │ ┌──────────────────┐          │
-///  │ │     Inbound      │          │
-///  │ │ Peer Connections │──────────┤
-///  │ └──────────────────┘          │
-///  │          │                    │
-///  ├──────────┼────────────────────┼───────────────────────────────┐
-///  │ PeerSet  ▼  AddressBook       ▼                               │
+///  ├───────────────────────────────┼───────────────────────────────┐
+///  │ AddressBook                   ▼                               │
 ///  │ ┌─────────────┐  ┌─────────────────────────┐  ┌─────────────┐ │
-///  │ │  Possibly   │  │`NeverAttemptedGossiped` │  │  `Failed`   │ │
-///  │ │Disconnected │  │           and           │  │   Peers     │◀┼┐
-///  │ │ `Responded` │  │`NeverAttemptedAlternate`│  │             │ ││
-///  │ │    Peers    │  │          Peers          │  │             │ ││
+///  │ │ `Responded` │  │`NeverAttemptedGossiped` │  │  `Failed`   │ │
+///  │ │    Peers    │  │`NeverAttemptedAlternate`│  │   Peers     │◀┼┐
+///  │ │             │  │`NeverAttemptedDnsSeeder`│  │             │ ││
+///  │ │             │  │          Peers          │  │             │ ││
 ///  │ └─────────────┘  └─────────────────────────┘  └─────────────┘ ││
 ///  │        │                      │                      │        ││
 ///  │ #1 oldest_first        #2 newest_first        #3 oldest_first ││
@@ -67,7 +70,7 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///  │        ▼                                                       │
 ///  │        Λ                                                       │
 ///  │       ╱ ╲            filter by                                 │
-///  └─────▶▕   ▏     !maybe_connected_addr                           │
+///  └─────▶▕   ▏      !recently_used_addr                            │
 ///          ╲ ╱    to remove recent `Responded`,                     │
 ///           V  `AttemptPending`, and `Failed` peers                 │
 ///           │                                                       │
@@ -79,14 +82,12 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///    │                │                                             │
 ///    └────────────────┘                                             │
 ///           │                                                       │
-///           │                                                       │
 ///           ▼                                                       │
 ///           Λ                                                       │
 ///          ╱ ╲                                                      │
 ///         ▕   ▏─────────────────────────────────────────────────────┘
 ///          ╲ ╱   connection failed, update last_failed to now()
 ///           V
-///           │
 ///           │ connection succeeded
 ///           ▼
 ///    ┌────────────┐
@@ -95,14 +96,12 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///    │to Discover │
 ///    └────────────┘
 ///           │
-///           │
 ///           ▼
 ///  ┌───────────────────────────────────────┐
 ///  │ every time we receive a peer message: │
 ///  │  * update state to `Responded`        │
 ///  │  * update last_success to now()       │
 ///  └───────────────────────────────────────┘
-///
 /// ```
 // TODO:
 //   * draw arrow from the "peer message" box into the `Responded` state box
