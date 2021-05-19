@@ -32,19 +32,20 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 /// ```ascii,no_run
 ///                         ┌──────────────────┐
 ///                         │     PeerSet      │
-///                         │GetPeers Responses│
+///                         │     Gossiped     │
+///                         │    Addresses     │
 ///                         └──────────────────┘
 ///                                  │      provides 
 ///                                  │ untrusted_last_seen
 ///                                  │
 ///                                  │
 ///    ┌──────────────────┐          │          ┌──────────────────┐ 
-///    │     Inbound      │          │          │       DNS        │
+///    │    Handshake     │          │          │       DNS        │
 ///    │    Canonical     │──────────┼──────────│      Seeder      │
 ///    │    Addresses     │          │          │    Addresses     │
 ///    └──────────────────┘          │          └──────────────────┘
-///          provides                │
-///     untrusted_last_seen          │
+///     untrusted_last_seen          │           untrusted_last_seen
+///         set to now               │               is unknown
 ///                                  │
 ///                                  ▼
 ///             filter by            Λ
