@@ -37,8 +37,6 @@ use zebra_chain::parameters::Network;
 
 use super::CandidateSet;
 use super::PeerSet;
-use chrono::Utc;
-use peer::Client;
 
 type PeerChange = Result<Change<SocketAddr, peer::Client>, BoxError>;
 
@@ -247,19 +245,16 @@ where
     // Add the DNS seeder peers to the address book, in the `AttemptPending` state.
     let mut initial_meta_addr = Vec::new();
     for addr in initial_peers {
-        // Treat DNS seeder peers like gossiped peers, but fill in defaults as needed
-        // TODO: make unique State or Change variants for DNS seeder peers?
-        let gossiped_meta_addr =
-            MetaAddr::new_gossiped_meta_addr(&addr, &PeerServices::NODE_NETWORK, &Utc::now());
+        let seeder_meta_addr = MetaAddr::new_dns_seeder_meta_addr(&addr);
         let _ = timestamp_collector
-            .send(MetaAddr::new_gossiped_change(&gossiped_meta_addr))
+            .send(MetaAddr::new_dns_seeder_change(&seeder_meta_addr))
             .await;
         let update_change = MetaAddr::update_attempt(&addr);
         let _ = timestamp_collector.send(update_change).await;
         // Apply the change, just like the AddressBook would
         let update_meta_addr = update_change
-            .into_meta_addr(&Some(&gossiped_meta_addr))
-            .expect("unexpected invalid gossiped to attempt transition");
+            .into_meta_addr(&Some(&seeder_meta_addr))
+            .expect("unexpected invalid seeder to attempt transition");
         initial_meta_addr.push(update_meta_addr);
     }
 
@@ -426,7 +421,7 @@ enum CrawlerAction {
     TimerCrawl { tick: Instant },
     /// Handle a successfully connected handshake `peer_set_change`.
     HandshakeConnected {
-        peer_set_change: Change<SocketAddr, Client>,
+        peer_set_change: Change<SocketAddr, peer::Client>,
     },
     /// Handle a handshake failure to `failed_addr`.
     HandshakeFailed {
@@ -626,8 +621,10 @@ where
 }
 
 /// Convert from a connector result to a Crawler action
-impl From<Result<Change<SocketAddr, Client>, (MetaAddr, BoxError)>> for CrawlerAction {
-    fn from(connector_result: Result<Change<SocketAddr, Client>, (MetaAddr, BoxError)>) -> Self {
+impl From<Result<Change<SocketAddr, peer::Client>, (MetaAddr, BoxError)>> for CrawlerAction {
+    fn from(
+        connector_result: Result<Change<SocketAddr, peer::Client>, (MetaAddr, BoxError)>,
+    ) -> Self {
         use CrawlerAction::*;
         match connector_result {
             Ok(peer_set_change) => HandshakeConnected { peer_set_change },

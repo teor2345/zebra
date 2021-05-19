@@ -8,6 +8,9 @@ use tracing::Span;
 
 use crate::{constants, meta_addr::MetaAddrChange, types::MetaAddr, Config, PeerAddrState};
 
+#[cfg(any(test, feature = "proptest-impl"))]
+use proptest_derive::Arbitrary;
+
 /// A database of peer listener addresses, their advertised services, and
 /// information on when they were last seen.
 ///
@@ -42,6 +45,7 @@ use crate::{constants, meta_addr::MetaAddrChange, types::MetaAddr, Config, PeerA
 /// - the remote addresses of inbound connections, or
 /// - the canonical address of any connection.
 #[derive(Clone, Debug)]
+#[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub struct AddressBook {
     /// Each known peer address has a matching `MetaAddr`.
     by_addr: HashMap<SocketAddr, MetaAddr>,
@@ -50,6 +54,10 @@ pub struct AddressBook {
     local_listener: SocketAddr,
 
     /// The span for operations on this address book.
+    #[cfg_attr(
+        any(test, feature = "proptest-impl"),
+        proptest(value = "Span::current()")
+    )]
     span: Span,
 
     /// The last time we logged a message about the address metrics.
@@ -57,10 +65,13 @@ pub struct AddressBook {
 }
 
 /// Metrics about the states of the addresses in an [`AddressBook`].
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct AddressMetrics {
     /// The number of addresses in the `Responded` state.
     responded: usize,
+
+    /// The number of addresses in the `NeverAttemptedDnsSeeder` state.
+    never_attempted_dns_seeder: usize,
 
     /// The number of addresses in the `NeverAttemptedGossiped` state.
     never_attempted_gossiped: usize,
@@ -120,12 +131,14 @@ impl AddressBook {
     }
 
     /// Get the contents of `self` in random order with sanitized timestamps.
+    ///
+    /// Skips peers with missing fields.
     pub fn sanitized(&self) -> Vec<MetaAddr> {
         use rand::seq::SliceRandom;
         let _guard = self.span.enter();
         let mut peers = self
             .peers_unordered()
-            .map(|a| MetaAddr::sanitize(&a))
+            .filter_map(|a| MetaAddr::sanitize(&a))
             .collect::<Vec<_>>();
         peers.shuffle(&mut rand::thread_rng());
         peers
@@ -362,12 +375,21 @@ impl AddressBook {
             .peers_unordered()
             .filter(|peer| matches!(peer.last_connection_state, PeerAddrState::Responded { .. }))
             .count();
+        let never_attempted_dns_seeder = self
+            .peers_unordered()
+            .filter(|peer| {
+                matches!(
+                    peer.last_connection_state,
+                    PeerAddrState::NeverAttemptedDnsSeeder
+                )
+            })
+            .count();
         let never_attempted_gossiped = self
             .peers_unordered()
             .filter(|peer| {
                 matches!(
                     peer.last_connection_state,
-                    PeerAddrState::NeverAttemptedGossiped
+                    PeerAddrState::NeverAttemptedGossiped { .. }
                 )
             })
             .count();
@@ -376,7 +398,7 @@ impl AddressBook {
             .filter(|peer| {
                 matches!(
                     peer.last_connection_state,
-                    PeerAddrState::NeverAttemptedAlternate
+                    PeerAddrState::NeverAttemptedAlternate { .. }
                 )
             })
             .count();
@@ -401,6 +423,7 @@ impl AddressBook {
 
         AddressMetrics {
             responded,
+            never_attempted_dns_seeder,
             never_attempted_gossiped,
             never_attempted_alternate,
             failed,
@@ -418,16 +441,19 @@ impl AddressBook {
 
         let m = self.address_metrics();
 
+        // States
         // TODO: rename to address_book.[state_name]
-        metrics::gauge!("candidate_set.responded", m.responded as f64);
+        metrics::gauge!("candidate_set.seeder", m.never_attempted_dns_seeder as f64);
         metrics::gauge!("candidate_set.gossiped", m.never_attempted_gossiped as f64);
         metrics::gauge!(
             "candidate_set.alternate",
             m.never_attempted_alternate as f64
         );
+        metrics::gauge!("candidate_set.responded", m.responded as f64);
         metrics::gauge!("candidate_set.failed", m.failed as f64);
         metrics::gauge!("candidate_set.pending", m.attempt_pending as f64);
 
+        // Times
         metrics::gauge!(
             "candidate_set.recently_attempted",
             m.recently_attempted as f64
@@ -435,6 +461,7 @@ impl AddressBook {
         metrics::gauge!("candidate_set.recently_live", m.recently_live as f64);
         metrics::gauge!("candidate_set.recently_failed", m.recently_failed as f64);
 
+        // Candidates (state and time based)
         metrics::gauge!(
             "candidate_set.connection_candidates",
             m.connection_candidates as f64

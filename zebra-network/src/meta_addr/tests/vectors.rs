@@ -16,37 +16,39 @@ fn sanitize_extremes() {
 
     let min_time_untrusted = MetaAddr {
         addr: "127.0.0.1:8233".parse().unwrap(),
-        services: Default::default(),
-        untrusted_last_seen: MIN_DATETIME,
-        last_connection_state: NeverAttemptedGossiped,
+        last_connection_state: NeverAttemptedGossiped {
+            untrusted_last_seen: MIN_DATETIME,
+            untrusted_services: Default::default(),
+        },
     };
 
     let min_time_local = MetaAddr {
         addr: "127.0.0.1:8233".parse().unwrap(),
-        services: Default::default(),
-        untrusted_last_seen: MIN_DATETIME,
         last_connection_state: Responded {
             last_attempt: MIN_DATETIME,
             last_success: MIN_DATETIME,
             last_failed: Some(MIN_DATETIME),
+            untrusted_last_seen: Some(MIN_DATETIME),
+            services: Default::default(),
         },
     };
 
     let max_time_untrusted = MetaAddr {
         addr: "127.0.0.1:8233".parse().unwrap(),
-        services: Default::default(),
-        untrusted_last_seen: MAX_DATETIME,
-        last_connection_state: NeverAttemptedGossiped,
+        last_connection_state: NeverAttemptedGossiped {
+            untrusted_last_seen: MAX_DATETIME,
+            untrusted_services: Default::default(),
+        },
     };
 
     let max_time_local = MetaAddr {
         addr: "127.0.0.1:8233".parse().unwrap(),
-        services: Default::default(),
-        untrusted_last_seen: MAX_DATETIME,
         last_connection_state: Responded {
             last_attempt: MAX_DATETIME,
             last_success: MAX_DATETIME,
             last_failed: Some(MAX_DATETIME),
+            untrusted_last_seen: Some(MAX_DATETIME),
+            services: Default::default(),
         },
     };
 
