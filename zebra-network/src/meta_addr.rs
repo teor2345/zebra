@@ -35,10 +35,14 @@ mod tests;
 
 /// Peer connection state, based on our interactions with the peer.
 ///
-/// Zebra also tracks how recently a peer has sent us messages, and derives peer
-/// liveness based on the current time. This derived state is tracked using
-/// [`AddressBook::maybe_connected_peers`] and
-/// [`AddressBook::reconnection_peers`].
+/// Zebra also tracks how recently we've had different kinds of interactions with
+/// each peer, and derives peer usage based on the current time. This derived state
+/// is tracked using [`AddressBook::recently_used_peers`] and
+/// [`AddressBook::candidate_peers`].
+///
+/// To avoid depending on untrusted or default data, Zebra tracks the required
+/// and optional data in each state. State updates are applied using
+/// [`MetaAddrChange`]s.
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub enum PeerAddrState {
@@ -414,7 +418,13 @@ impl Eq for PeerAddrState {}
 
 /// A change to a `MetaAddr` in an `AddressBook`.
 ///
-/// Most `PeerAddrState`s have a corresponding `Change`.
+/// Most `PeerAddrState`s have a corresponding `Change`:
+/// - `New...` changes create a new address book entry, or add fields to an
+///   existing `NeverAttempted...` address book entry.
+/// - `Update...` changes update the state, and add or update fields in an
+///   existing address book entry.
+/// The `UpdateShutdown` preserves the `Responded` state, but changes all
+/// other states to `Failed`.
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub enum MetaAddrChange {
@@ -734,16 +744,19 @@ pub struct MetaAddr {
     /// The exact meaning depends on `last_connection_state`:
     ///   - `Responded`: the address we used to make a direct outbound connection
     ///      to this peer
-    ///   - `NeverAttemptedGossiped`: an unverified address provided by a remote
-    ///      peer
+    ///   - `NeverAttemptedDnsSeeder: an unverified address provided by a DNS
+    ///      seeder
+    ///   - `NeverAttemptedGossiped`: an unverified address and services provided
+    ///      by a remote peer
     ///   - `NeverAttemptedAlternate`: a directly connected peer claimed that
     ///      this address was its canonical address in its `Version` message,
-    ///      but either:
+    ///      (and provided services). But either:
     ///      - the peer made an inbound connection to us, or
     ///      - the address we used to make a direct outbound connection was
     ///        different from the canonical address
-    ///   - `Failed` or `AttemptPending`: an unverified gossiped or alternate
-    ///      address, or an address from a previous direct outbound connection
+    ///   - `Failed` or `AttemptPending`: an unverified seeder, gossiped or
+    ///      alternate address, or an address from a previous direct outbound
+    ///      connection
     ///
     /// ## Security
     ///
@@ -949,13 +962,12 @@ impl MetaAddr {
     /// The last time another node claimed this peer was valid.
     ///
     /// The exact meaning depends on `last_connection_state`:
-    ///   - `Responded`: the last time we processed a message from this peer
+    ///   - `NeverAttemptedSeed`: the seed config doesn't have any last seen info,
+    ///      so this field is `None`
     ///   - `NeverAttemptedGossiped`: the unverified time provided by the remote
     ///      peer that sent us this address
     ///   - `NeverAttemptedAlternate`: the local time we received the `Version`
     ///      message containing this address from a peer
-    ///   - `NeverAttemptedSeed`: the seed config doesn't have any last seen info,
-    ///      so this field is `None`
     ///   - `Failed` and `AttemptPending`: these states do not update this field
     ///
     /// ## Security
