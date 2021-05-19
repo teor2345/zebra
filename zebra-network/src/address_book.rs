@@ -44,6 +44,8 @@ use proptest_derive::Arbitrary;
 /// Updates must not be based on:
 /// - the remote addresses of inbound connections, or
 /// - the canonical address of any connection.
+///
+/// See the [`CandidateSet`] for a detailed peer state diagram.
 #[derive(Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub struct AddressBook {
