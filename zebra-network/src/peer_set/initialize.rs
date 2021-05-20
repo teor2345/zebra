@@ -71,7 +71,7 @@ where
     S: Service<Request, Response = Response, Error = BoxError> + Clone + Send + 'static,
     S::Future: Send + 'static,
 {
-    let (address_book, timestamp_collector) = TimestampCollector::spawn(&config);
+    let (address_book, timestamp_collector) = TimestampCollector::spawn(config.clone());
     let (inv_sender, inv_receiver) = broadcast::channel(100);
 
     // Construct services that handle inbound handshakes and perform outbound
@@ -248,15 +248,15 @@ where
     // applied after updates from concurrent tasks.
     let mut initial_meta_addr = Vec::new();
     for addr in initial_peers {
-        let seeder_meta_addr = MetaAddr::new_seed_meta_addr(&addr);
+        let seeder_meta_addr = MetaAddr::new_seed_meta_addr(addr);
         let _ = timestamp_collector
-            .send(MetaAddr::new_seed_change(&seeder_meta_addr))
+            .send(MetaAddr::new_seed_change(seeder_meta_addr))
             .await;
-        let update_change = MetaAddr::update_attempt(&addr);
+        let update_change = MetaAddr::update_attempt(addr);
         let _ = timestamp_collector.send(update_change).await;
         // Apply the change, just like the AddressBook would
         let update_meta_addr = update_change
-            .into_meta_addr(&Some(&seeder_meta_addr))
+            .into_meta_addr(Some(seeder_meta_addr))
             .expect("unexpected invalid seeder to attempt transition");
         initial_meta_addr.push(update_meta_addr);
     }
@@ -327,7 +327,7 @@ where
                       "an initial peer connection failed");
                 }
                 let _ = timestamp_collector
-                    .send(MetaAddr::update_failed(&failed_addr.addr, &None))
+                    .send(MetaAddr::update_failed(failed_addr.addr, None))
                     .await;
                 continue;
             }
@@ -573,7 +573,7 @@ where
             }
             HandshakeFailed { failed_addr, error } => {
                 debug!(addr = ?failed_addr.addr, ?error, "marking candidate as failed");
-                candidates.report_failed(&failed_addr.addr);
+                candidates.report_failed(failed_addr.addr);
                 // The demand signal that was taken out of the queue
                 // to attempt to connect to the failed candidate never
                 // turned into a connection, so add it back:

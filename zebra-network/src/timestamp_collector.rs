@@ -17,7 +17,7 @@ impl TimestampCollector {
     /// * the transmission channel for [`MetaAddrChange`] events, and
     /// * the [`AddressBook`] it updates.
     pub fn spawn(
-        config: &Config,
+        config: Config,
     ) -> (
         Arc<std::sync::Mutex<AddressBook>>,
         mpsc::Sender<MetaAddrChange>,

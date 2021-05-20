@@ -671,8 +671,8 @@ where
             // `Version` messages.
             let alternate_addrs = connected_addr.get_alternate_addrs(remote_canonical_addr);
             for alt_addr in alternate_addrs {
-                let alt_addr = MetaAddr::new_alternate(&alt_addr, &remote_services);
-                if alt_addr.is_valid_for_outbound(&None) {
+                let alt_addr = MetaAddr::new_alternate(alt_addr, remote_services);
+                if alt_addr.is_valid_for_outbound(None) {
                     tracing::info!(
                         ?alt_addr,
                         "sending valid alternate peer address to the address book"
@@ -760,8 +760,8 @@ where
                                     // so this await should not hang
                                     let _ = inbound_ts_collector
                                         .send(MetaAddr::update_responded(
-                                            &book_addr,
-                                            &remote_services,
+                                            book_addr,
+                                            remote_services,
                                         ))
                                         .await;
                                 }
@@ -777,8 +777,8 @@ where
                                 if let Some(book_addr) = connected_addr.get_address_book_addr() {
                                     let _ = inbound_ts_collector
                                         .send(MetaAddr::update_failed(
-                                            &book_addr,
-                                            &Some(remote_services),
+                                            book_addr,
+                                            Some(remote_services),
                                         ))
                                         .await;
                                 }
@@ -890,8 +890,8 @@ where
                                 // awaiting a local task won't hang
                                 let _ = timestamp_collector
                                     .send(MetaAddr::update_shutdown(
-                                        &book_addr,
-                                        &Some(remote_services),
+                                        book_addr,
+                                        Some(remote_services),
                                     ))
                                     .await;
                             }
@@ -1028,7 +1028,7 @@ where
 
             if let Some(book_addr) = connected_addr.get_address_book_addr() {
                 let _ = timestamp_collector
-                    .send(MetaAddr::update_failed(&book_addr, &Some(*remote_services)))
+                    .send(MetaAddr::update_failed(book_addr, Some(*remote_services)))
                     .await;
             }
             Err(err)

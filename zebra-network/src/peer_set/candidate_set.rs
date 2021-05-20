@@ -275,9 +275,7 @@ where
     /// Add new `addrs` to the address book.
     fn send_addrs(&self, addrs: impl IntoIterator<Item = MetaAddr>) {
         // Turn the addresses into "new gossiped" changes
-        let addrs = addrs
-            .into_iter()
-            .map(|addr| MetaAddr::new_gossiped_change(&addr));
+        let addrs = addrs.into_iter().map(MetaAddr::new_gossiped_change);
 
         // # Correctness
         //
@@ -335,7 +333,7 @@ where
             // `None`. We only need to sleep before yielding an address.
             let connect = guard.next_candidate_peer()?;
 
-            let connect = MetaAddr::update_attempt(&connect.addr);
+            let connect = MetaAddr::update_attempt(connect.addr);
             guard.update(connect)?
         };
 
@@ -346,8 +344,8 @@ where
     }
 
     /// Mark `addr` as a failed peer.
-    pub fn report_failed(&mut self, addr: &SocketAddr) {
-        let addr = MetaAddr::update_failed(&addr, &None);
+    pub fn report_failed(&mut self, addr: SocketAddr) {
+        let addr = MetaAddr::update_failed(addr, None);
         // # Correctness
         //
         // Briefly hold the address book threaded mutex, to update the state for

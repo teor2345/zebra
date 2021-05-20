@@ -102,7 +102,7 @@ pub struct AddressMetrics {
 
 impl AddressBook {
     /// Construct an [`AddressBook`] with the given `config` and [`tracing::Span`].
-    pub fn new(config: &Config, span: Span) -> AddressBook {
+    pub fn new(config: Config, span: Span) -> AddressBook {
         let constructor_span = span.clone();
         let _guard = constructor_span.enter();
 
@@ -129,7 +129,7 @@ impl AddressBook {
     /// (If peers gossip our address back to us, the handshake nonce will
     /// protect us from self-connections.)
     pub fn get_local_listener(&self) -> MetaAddrChange {
-        MetaAddr::new_local_listener(&self.local_listener)
+        MetaAddr::new_local_listener(self.local_listener)
     }
 
     /// Get the contents of `self` in random order with sanitized timestamps.
@@ -147,9 +147,9 @@ impl AddressBook {
     }
 
     /// Returns true if the address book has an entry for `addr`.
-    pub fn contains_addr(&self, addr: &SocketAddr) -> bool {
+    pub fn contains_addr(&self, addr: SocketAddr) -> bool {
         let _guard = self.span.enter();
-        self.by_addr.contains_key(addr)
+        self.by_addr.contains_key(&addr)
     }
 
     /// Returns the entry corresponding to `addr`, or [`None`] if it does not exist.
@@ -174,11 +174,11 @@ impl AddressBook {
             recent_peers = self.recently_live_peers().count(),
         );
         let addr = change.get_addr();
-        let book_entry = self.by_addr.get(&addr);
+        let book_entry = self.by_addr.get(&addr).cloned();
 
         // If a node that we are directly connected to has changed to a client,
         // remove it from the address book.
-        if change.is_direct_client(&book_entry) && self.contains_addr(&addr) {
+        if change.is_direct_client(book_entry) && self.contains_addr(addr) {
             std::mem::drop(_guard);
             self.take(addr);
             self.update_metrics();
@@ -189,11 +189,11 @@ impl AddressBook {
         //
         // Communication with these addresses can be monitored via Zebra's
         // metrics. (The address book is for valid peer addresses.)
-        if !change.is_valid_for_outbound(&book_entry) {
+        if !change.is_valid_for_outbound(book_entry) {
             return None;
         }
 
-        let new_entry = change.into_meta_addr(&book_entry);
+        let new_entry = change.into_meta_addr(book_entry);
         if let Some(new_entry) = new_entry {
             self.by_addr.insert(addr, new_entry);
             std::mem::drop(_guard);
@@ -243,9 +243,9 @@ impl AddressBook {
     }
 
     /// Returns true if the given [`SocketAddr`] has recently sent us a message.
-    pub fn recently_live_addr(&self, addr: &SocketAddr) -> bool {
+    pub fn recently_live_addr(&self, addr: SocketAddr) -> bool {
         let _guard = self.span.enter();
-        match self.by_addr.get(addr) {
+        match self.by_addr.get(&addr) {
             None => false,
             // Responded peers are the only peers that can be live
             Some(peer) => {
@@ -256,9 +256,9 @@ impl AddressBook {
     }
 
     /// Returns true if the given [`SocketAddr`] had a recent connection attempt.
-    pub fn recently_attempted_addr(&self, addr: &SocketAddr) -> bool {
+    pub fn recently_attempted_addr(&self, addr: SocketAddr) -> bool {
         let _guard = self.span.enter();
-        match self.by_addr.get(addr) {
+        match self.by_addr.get(&addr) {
             None => false,
             Some(peer) => {
                 peer.get_last_attempt().unwrap_or(chrono::MIN_DATETIME)
@@ -268,9 +268,9 @@ impl AddressBook {
     }
 
     /// Returns true if the given [`SocketAddr`] recently failed.
-    pub fn recently_failed_addr(&self, addr: &SocketAddr) -> bool {
+    pub fn recently_failed_addr(&self, addr: SocketAddr) -> bool {
         let _guard = self.span.enter();
-        match self.by_addr.get(addr) {
+        match self.by_addr.get(&addr) {
             None => false,
             Some(peer) => {
                 peer.get_last_failed().unwrap_or(chrono::MIN_DATETIME)
@@ -281,7 +281,7 @@ impl AddressBook {
 
     /// Returns true if the given [`SocketAddr`] had recent attempts, successes,
     /// or failures.
-    pub fn recently_used_addr(&self, addr: &SocketAddr) -> bool {
+    pub fn recently_used_addr(&self, addr: SocketAddr) -> bool {
         self.recently_live_addr(addr)
             || self.recently_attempted_addr(addr)
             || self.recently_failed_addr(addr)
@@ -299,7 +299,7 @@ impl AddressBook {
         let _guard = self.span.enter();
 
         self.peers_unordered()
-            .filter(move |peer| self.recently_attempted_addr(&peer.addr))
+            .filter(move |peer| self.recently_attempted_addr(peer.addr))
             .cloned()
     }
 
@@ -309,7 +309,7 @@ impl AddressBook {
         let _guard = self.span.enter();
 
         self.peers_unordered()
-            .filter(move |peer| self.recently_live_addr(&peer.addr))
+            .filter(move |peer| self.recently_live_addr(peer.addr))
             .cloned()
     }
 
@@ -319,7 +319,7 @@ impl AddressBook {
         let _guard = self.span.enter();
 
         self.peers_unordered()
-            .filter(move |peer| self.recently_failed_addr(&peer.addr))
+            .filter(move |peer| self.recently_failed_addr(peer.addr))
             .cloned()
     }
 
@@ -329,7 +329,7 @@ impl AddressBook {
         let _guard = self.span.enter();
 
         self.peers_unordered()
-            .filter(move |peer| self.recently_used_addr(&peer.addr))
+            .filter(move |peer| self.recently_used_addr(peer.addr))
             .cloned()
     }
 
@@ -341,7 +341,7 @@ impl AddressBook {
 
         // Skip recently used peers (including live peers)
         self.peers_unordered()
-            .filter(move |peer| !self.recently_used_addr(&peer.addr))
+            .filter(move |peer| !self.recently_used_addr(peer.addr))
             .cloned()
     }
 
@@ -470,11 +470,11 @@ impl AddressBook {
         );
 
         std::mem::drop(_guard);
-        self.log_metrics(&m);
+        self.log_metrics(m);
     }
 
     /// Log metrics for this address book
-    fn log_metrics(&mut self, m: &AddressMetrics) {
+    fn log_metrics(&mut self, m: AddressMetrics) {
         let _guard = self.span.enter();
 
         trace!(

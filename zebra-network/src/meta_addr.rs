@@ -560,10 +560,10 @@ impl MetaAddrChange {
     /// `book_entry` is the entry for [`self.get_addr`] in the address book.
     ///
     /// Assmes that missing fields or entries are valid.
-    pub fn is_valid_for_outbound(&self, book_entry: &Option<&MetaAddr>) -> bool {
+    pub fn is_valid_for_outbound(&self, book_entry: Option<MetaAddr>) -> bool {
         // Use the latest valid info we have
         self.into_meta_addr(book_entry)
-            .or_else(|| book_entry.cloned())
+            .or(book_entry)
             .map(|meta_addr| meta_addr.is_valid_for_outbound())
             .unwrap_or(true)
     }
@@ -573,10 +573,10 @@ impl MetaAddrChange {
     /// `book_entry` is the entry for [`self.get_addr`] in the address book.
     ///
     /// Assmes that missing fields or entries are not clients.
-    pub fn is_direct_client(&self, book_entry: &Option<&MetaAddr>) -> bool {
+    pub fn is_direct_client(&self, book_entry: Option<MetaAddr>) -> bool {
         // Use the latest valid info we have
         self.into_meta_addr(book_entry)
-            .or_else(|| book_entry.cloned())
+            .or(book_entry)
             .map(|meta_addr| meta_addr.is_direct_client())
             .unwrap_or(false)
     }
@@ -591,7 +591,7 @@ impl MetaAddrChange {
     /// - multiple tasks read the address book,
     /// so messaging ordering is not guaranteed.
     /// (But the address book should eventually be consistent.)
-    pub fn into_meta_addr(self, old_entry: &Option<&MetaAddr>) -> Option<MetaAddr> {
+    pub fn into_meta_addr(self, old_entry: Option<MetaAddr>) -> Option<MetaAddr> {
         let has_been_attempted = old_entry
             .map(|old| old.has_been_attempted())
             .unwrap_or(false);
@@ -606,7 +606,7 @@ impl MetaAddrChange {
         match self {
             // New seed, not in address book:
             NewSeed { addr } if old_entry.is_none() => {
-                Some(MetaAddr::new(&addr, &NeverAttemptedSeed))
+                Some(MetaAddr::new(addr, NeverAttemptedSeed))
             }
 
             // New gossiped or alternate, not attempted:
@@ -616,8 +616,8 @@ impl MetaAddrChange {
                 untrusted_services,
                 untrusted_last_seen,
             } if !has_been_attempted => Some(MetaAddr::new(
-                &addr,
-                &NeverAttemptedGossiped {
+                addr,
+                NeverAttemptedGossiped {
                     untrusted_services,
                     // Keep the first time we got
                     untrusted_last_seen: old_untrusted_last_seen.unwrap_or(untrusted_last_seen),
@@ -627,8 +627,8 @@ impl MetaAddrChange {
                 addr,
                 untrusted_services,
             } if !has_been_attempted => Some(MetaAddr::new(
-                &addr,
-                &NeverAttemptedAlternate {
+                addr,
+                NeverAttemptedAlternate {
                     untrusted_services,
                     // Keep the first time we got
                     untrusted_last_seen: old_untrusted_last_seen.unwrap_or_else(Utc::now),
@@ -642,8 +642,8 @@ impl MetaAddrChange {
             // Attempt:
             // Update last_attempt
             UpdateAttempt { addr } => Some(MetaAddr::new(
-                &addr,
-                &AttemptPending {
+                addr,
+                AttemptPending {
                     last_attempt: Utc::now(),
                     last_success: old_last_success,
                     last_failed: old_last_failed,
@@ -655,8 +655,8 @@ impl MetaAddrChange {
             // Responded:
             // Update last_success and services
             UpdateResponded { addr, services } => Some(MetaAddr::new(
-                &addr,
-                &Responded {
+                addr,
+                Responded {
                     // When the attempt message arrives, it will replace this default.
                     // (But it's a reasonable default anyway.)
                     last_attempt: old_last_attempt.unwrap_or_else(Utc::now),
@@ -670,8 +670,8 @@ impl MetaAddrChange {
             // Failed:
             // Update last_failed and services if present
             UpdateFailed { addr, services } => Some(MetaAddr::new(
-                &addr,
-                &Failed {
+                addr,
+                Failed {
                     // When the attempt message arrives, it will replace this default.
                     // (But it's a reasonable default anyway.)
                     last_attempt: old_last_attempt.unwrap_or_else(Utc::now),
@@ -698,8 +698,8 @@ impl MetaAddrChange {
                         untrusted_last_seen,
                         services: old_services,
                     }) => Some(MetaAddr::new(
-                        &addr,
-                        &Responded {
+                        addr,
+                        Responded {
                             last_attempt,
                             last_success,
                             last_failed,
@@ -720,8 +720,8 @@ impl MetaAddrChange {
                     | Some(NeverAttemptedGossiped { .. })
                     | Some(NeverAttemptedAlternate { .. })
                     | None => Some(MetaAddr::new(
-                        &addr,
-                        &Failed {
+                        addr,
+                        Failed {
                             // When the attempt message arrives, it will replace this default.
                             // (But it's a reasonable default anyway.)
                             last_attempt: old_last_attempt.unwrap_or_else(Utc::now),
@@ -784,17 +784,17 @@ impl MetaAddr {
     /// This function should only be used by the [`meta_addr`] and [`address_book`]
     /// modules. Other callers should use a more specific [`MetaAddr`] or
     /// [`MetaAddrChange`] constructor.
-    fn new(addr: &SocketAddr, last_connection_state: &PeerAddrState) -> MetaAddr {
+    fn new(addr: SocketAddr, last_connection_state: PeerAddrState) -> MetaAddr {
         MetaAddr {
-            addr: *addr,
-            last_connection_state: *last_connection_state,
+            addr,
+            last_connection_state,
         }
     }
 
     /// Create a new seed [`MetaAddr`, based on the configured seed addresses.
-    pub fn new_seed_meta_addr(addr: &SocketAddr) -> MetaAddr {
+    pub fn new_seed_meta_addr(addr: SocketAddr) -> MetaAddr {
         MetaAddr {
-            addr: *addr,
+            addr,
             last_connection_state: NeverAttemptedSeed,
         }
     }
@@ -803,7 +803,7 @@ impl MetaAddr {
     /// the seeder.
     ///
     /// Panics unless `meta_addr` is in the [`NeverAttemptedSeed`] state.
-    pub fn new_seed_change(meta_addr: &MetaAddr) -> MetaAddrChange {
+    pub fn new_seed_change(meta_addr: MetaAddr) -> MetaAddrChange {
         if meta_addr.last_connection_state == NeverAttemptedSeed {
             NewSeed {
                 addr: meta_addr.addr,
@@ -816,15 +816,15 @@ impl MetaAddr {
     /// Create a new gossiped [`MetaAddr`, based on the deserialized fields from
     /// a peer [`Addr`] message.
     pub fn new_gossiped_meta_addr(
-        addr: &SocketAddr,
-        untrusted_services: &PeerServices,
-        untrusted_last_seen: &DateTime<Utc>,
+        addr: SocketAddr,
+        untrusted_services: PeerServices,
+        untrusted_last_seen: DateTime<Utc>,
     ) -> MetaAddr {
         MetaAddr {
-            addr: *addr,
+            addr,
             last_connection_state: NeverAttemptedGossiped {
-                untrusted_last_seen: *untrusted_last_seen,
-                untrusted_services: *untrusted_services,
+                untrusted_last_seen,
+                untrusted_services,
             },
         }
     }
@@ -833,7 +833,7 @@ impl MetaAddr {
     /// message.
     ///
     /// Panics unless `meta_addr` is in the [`NeverAttemptedGossiped`] state.
-    pub fn new_gossiped_change(meta_addr: &MetaAddr) -> MetaAddrChange {
+    pub fn new_gossiped_change(meta_addr: MetaAddr) -> MetaAddrChange {
         if let NeverAttemptedGossiped {
             untrusted_last_seen,
             untrusted_services,
@@ -854,16 +854,16 @@ impl MetaAddr {
 
     /// Add or update an [`AddressBook`] entry, based on the canonical address in a
     /// peer's [`Version`] message.
-    pub fn new_alternate(addr: &SocketAddr, services: &PeerServices) -> MetaAddrChange {
+    pub fn new_alternate(addr: SocketAddr, untrusted_services: PeerServices) -> MetaAddrChange {
         NewAlternate {
-            addr: *addr,
-            untrusted_services: *services,
+            addr,
+            untrusted_services,
         }
     }
 
     /// Update an [`AddressBook`] entry when we start connecting to a peer.
-    pub fn update_attempt(addr: &SocketAddr) -> MetaAddrChange {
-        UpdateAttempt { addr: *addr }
+    pub fn update_attempt(addr: SocketAddr) -> MetaAddrChange {
+        UpdateAttempt { addr }
     }
 
     /// Update an [`AddressBook`] entry when a peer sends a message after a
@@ -878,35 +878,26 @@ impl MetaAddr {
     /// - malicious peers could interfere with other peers' [`AddressBook`] state,
     ///   or
     /// - Zebra could advertise unreachable addresses to its own peers.
-    pub fn update_responded(addr: &SocketAddr, services: &PeerServices) -> MetaAddrChange {
-        UpdateResponded {
-            addr: *addr,
-            services: *services,
-        }
+    pub fn update_responded(addr: SocketAddr, services: PeerServices) -> MetaAddrChange {
+        UpdateResponded { addr, services }
     }
 
     /// Update an [`AddressBook`] entry when a peer connection fails.
-    pub fn update_failed(addr: &SocketAddr, services: &Option<PeerServices>) -> MetaAddrChange {
-        UpdateFailed {
-            addr: *addr,
-            services: *services,
-        }
+    pub fn update_failed(addr: SocketAddr, services: Option<PeerServices>) -> MetaAddrChange {
+        UpdateFailed { addr, services }
     }
 
     /// Update an [`AddressBook`] entry when a peer connection shuts down.
-    pub fn update_shutdown(addr: &SocketAddr, services: &Option<PeerServices>) -> MetaAddrChange {
-        UpdateShutdown {
-            addr: *addr,
-            services: *services,
-        }
+    pub fn update_shutdown(addr: SocketAddr, services: Option<PeerServices>) -> MetaAddrChange {
+        UpdateShutdown { addr, services }
     }
 
     /// Add or update our local listener address in an [`AddressBook`].
     ///
     /// See [`AddressBook::get_local_listener`] for details.
-    pub fn new_local_listener(addr: &SocketAddr) -> MetaAddrChange {
+    pub fn new_local_listener(addr: SocketAddr) -> MetaAddrChange {
         NewAlternate {
-            addr: *addr,
+            addr,
             // Note: in this unique case, the services are actually trusted
             //
             // TODO: create a "local services" constant
@@ -1134,13 +1125,14 @@ impl ZcashDeserialize for MetaAddr {
     fn zcash_deserialize<R: Read>(mut reader: R) -> Result<Self, SerializationError> {
         // This can't panic, because all u32 values are valid `Utc.timestamp`s
         let untrusted_last_seen = Utc.timestamp(reader.read_u32::<LittleEndian>()?.into(), 0);
-        let services = PeerServices::from_bits_truncate(reader.read_u64::<LittleEndian>()?);
+        let untrusted_services =
+            PeerServices::from_bits_truncate(reader.read_u64::<LittleEndian>()?);
         let addr = reader.read_socket_addr()?;
 
         Ok(MetaAddr::new_gossiped_meta_addr(
-            &addr,
-            &services,
-            &untrusted_last_seen,
+            addr,
+            untrusted_services,
+            untrusted_last_seen,
         ))
     }
 }
