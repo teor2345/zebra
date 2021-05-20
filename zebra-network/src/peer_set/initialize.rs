@@ -15,7 +15,7 @@ use futures::{
 use tokio::{
     net::TcpListener,
     sync::{broadcast, watch},
-    time::{error::Elapsed, timeout, Instant},
+    time::Instant,
 };
 use tower::{
     buffer::Buffer, discover::Change, layer::Layer, load::peak_ewma::PeakEwmaDiscover,
@@ -401,7 +401,7 @@ where
             let mut tx2 = tx.clone();
             tokio::spawn(
                 async move {
-                    if let Ok(Ok(client)) = timeout(constants::HANDSHAKE_TIMEOUT, handshake).await {
+                    if let Ok(client) = handshake.await {
                         let _ = tx2.send(Ok(Change::Insert(addr, client))).await;
                     }
                 }
@@ -611,16 +611,11 @@ where
         .expect("outbound connector never errors");
 
     // the handshake has timeouts, so it shouldn't hang
-    timeout(
-        constants::HANDSHAKE_TIMEOUT,
-        outbound_connector
-            .call(candidate.addr)
-            .map_err(|e| (candidate, e))
-            .map(Into::into),
-    )
-    .map_err(|e| (candidate, e))
-    .map(Into::into)
-    .await
+    outbound_connector
+        .call(candidate.addr)
+        .map_err(|e| (candidate, e))
+        .map(Into::into)
+        .await
 }
 
 /// Convert from a connector result to a Crawler action
@@ -636,23 +631,6 @@ impl From<Result<Change<SocketAddr, peer::Client>, (MetaAddr, BoxError)>> for Cr
                 HandshakeFailed {
                     failed_addr: candidate,
                     error: e,
-                }
-            }
-        }
-    }
-}
-
-/// Convert from a timeout(connector) result to a Crawler action
-impl From<Result<CrawlerAction, (MetaAddr, Elapsed)>> for CrawlerAction {
-    fn from(timeout_result: Result<CrawlerAction, (MetaAddr, Elapsed)>) -> Self {
-        use CrawlerAction::*;
-        match timeout_result {
-            Ok(crawler_action) => crawler_action,
-            Err((candidate, e)) => {
-                debug!(addr = ?candidate.addr, ?e, "timeout when connecting to candidate");
-                HandshakeFailed {
-                    failed_addr: candidate,
-                    error: e.into(),
                 }
             }
         }
