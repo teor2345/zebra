@@ -233,7 +233,8 @@ where
                         ?addrs,
                         "got response to GetPeers"
                     );
-                    self.process_addrs(addrs);
+                    let addrs = self.validate_addrs(addrs);
+                    self.send_addrs(addrs);
                 }
                 Err(e) => {
                     // since we do a fanout, and new updates are triggered by
@@ -247,8 +248,32 @@ where
         Ok(())
     }
 
+    /// Check new `addrs` before adding them to the address book.
+    ///
+    /// If the data in an address is invalid, this function can:
+    /// - modify the address data, or
+    /// - delete the address.
+    fn validate_addrs(
+        &self,
+        addrs: impl IntoIterator<Item = MetaAddr>,
+    ) -> impl IntoIterator<Item = MetaAddr> {
+        // Note: The address book handles duplicate addresses internally,
+        // so we don't need to de-duplicate addresses here.
+
+        // TODO:
+        // We should eventually implement these checks in this function:
+        // - Zebra should stop believing far-future last_seen times from peers (#1871)
+        // - Zebra should ignore peers that are older than 3 weeks (part of #1865)
+        //   - Zebra should count back 3 weeks from the newest peer timestamp sent
+        //     by the other peer, to compensate for clock skew
+        // - Zebra should limit the number of addresses it uses from a single Addrs
+        //   response (#1869)
+
+        addrs
+    }
+
     /// Add new `addrs` to the address book.
-    fn process_addrs(&self, addrs: impl IntoIterator<Item = MetaAddr>) {
+    fn send_addrs(&self, addrs: impl IntoIterator<Item = MetaAddr>) {
         // Turn the addresses into "new gossiped" changes
         let addrs = addrs
             .into_iter()
