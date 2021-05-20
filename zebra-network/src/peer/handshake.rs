@@ -332,7 +332,7 @@ where
 
     /// Provide a hook for timestamp collection. Optional.
     ///
-    /// This channel takes `MetaAddrChange`s, which contain permanent addresses
+    /// This channel takes [`MetaAddrChange`]s, which contain permanent addresses
     /// that be used to make outbound connections to peers.
     pub fn with_timestamp_collector(
         mut self,

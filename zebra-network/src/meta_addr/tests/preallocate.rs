@@ -9,7 +9,7 @@ use std::convert::TryInto;
 
 proptest! {
     /// Confirm that each MetaAddr takes exactly META_ADDR_SIZE bytes when serialized.
-    /// This verifies that our calculated `TrustedPreallocate::max_allocation()` is indeed an upper bound.
+    /// This verifies that our calculated [`TrustedPreallocate::max_allocation`] is indeed an upper bound.
     #[test]
     fn meta_addr_size_is_correct(addr in MetaAddr::arbitrary()) {
         // TODO: make a strategy that has no None fields

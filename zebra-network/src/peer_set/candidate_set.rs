@@ -6,20 +6,21 @@ use tower::{Service, ServiceExt};
 
 use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response};
 
-/// The `CandidateSet` manages the `PeerSet`'s peer reconnection attempts.
+/// The [`CandidateSet`] manages outbound peer connection attempts.
+/// Successful connections become peers in the [`PeerSet`].
 ///
-/// It divides the set of all possible candidate peers into disjoint subsets,
-/// using the `PeerAddrState`:
+/// The candidate set divides the set of all possible outbound peers into
+/// disjoint subsets, using the [`PeerAddrState`:
 ///
-/// 1. `Responded` peers, which we previously had outbound connections to.
-/// 2. `NeverAttemptedGossiped` peers, which we learned about from other peers
+/// 1. [`Responded`] peers, which we previously had outbound connections to.
+/// 2. [`NeverAttemptedGossiped`] peers, which we learned about from other peers
 ///     but have never connected to;
-/// 3. `NeverAttemptedAlternate` peers, which we learned from the `Version`
+/// 3. [`NeverAttemptedAlternate`] peers, which we learned from the [`Version`
 ///     messages of directly connected peers, but have never connected to;
-/// 4. `NeverAttemptedSeed` peers, which we learned about from our seed config,
+/// 4. [`NeverAttemptedSeed`] peers, which we learned about from our seed config,
 ///     but have never connected to;
-/// 5. `Failed` peers, to whom we attempted to connect but were unable to;
-/// 6. `AttemptPending` peers, which we've recently queued for a connection.
+/// 5. [`Failed`] peers, to whom we attempted to connect but were unable to;
+/// 6. [`AttemptPending`] peers, which we've recently queued for a connection.
 ///
 /// Never attempted peers are always available for connection.
 ///
@@ -107,6 +108,9 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 // TODO:
 //   * draw arrow from the "peer message" box into the `Responded` state box
 //   * make the "disjoint states" box include `AttemptPending`
+//   * show the Seed -> Gossip / Alternate transition
+//   * show all possible transitions between Attempt/Responded/Failed,
+//     except Failed -> Responded is invalid, must go through Attempt
 pub(super) struct CandidateSet<S> {
     pub(super) address_book: Arc<std::sync::Mutex<AddressBook>>,
     pub(super) peer_service: S,
@@ -118,12 +122,12 @@ where
     S: Service<Request, Response = Response, Error = BoxError>,
     S::Future: Send + 'static,
 {
-    /// The minimum time between successive calls to `CandidateSet::next()`.
+    /// The minimum time between successive calls to [`CandidateSet::next`].
     ///
     /// ## Security
     ///
     /// Zebra resists distributed denial of service attacks by making sure that new peer connections
-    /// are initiated at least `MIN_PEER_CONNECTION_INTERVAL` apart.
+    /// are initiated at least [`MIN_PEER_CONNECTION_INTERVAL`] apart.
     const MIN_PEER_CONNECTION_INTERVAL: Duration = Duration::from_millis(100);
 
     /// Uses `address_book` and `peer_service` to manage a [`CandidateSet`] of peers.
@@ -140,7 +144,7 @@ where
 
     /// Update the peer set from the network, using the default fanout limit.
     ///
-    /// See `update_initial` for details.
+    /// See [`update_initial`] for details.
     pub async fn update(&mut self) -> Result<(), BoxError> {
         self.update_timeout(None).await
     }
@@ -148,9 +152,9 @@ where
     /// Update the peer set from the network, limiting the fanout to
     /// `fanout_limit`.
     ///
-    /// - Ask a few live `Responded` peers to send us more peers.
+    /// - Ask a few live [`Responded`] peers to send us more peers.
     /// - Process all completed peer responses, adding new peers in the
-    ///   `NeverAttemptedGossiped` state.
+    ///   [`NeverAttemptedGossiped`] state.
     ///
     /// ## Correctness
     ///
@@ -161,11 +165,11 @@ where
     /// errors on permanent failures.
     ///
     /// The handshaker sets up the peer message receiver so it also sends a
-    /// `Responded` peer address update.
+    /// [`Responded`] peer address update.
     ///
-    /// `report_failed` puts peers into the `Failed` state.
+    /// [`report_failed`] puts peers into the [`Failed`] state.
     ///
-    /// `next` puts peers into the `AttemptPending` state.
+    /// [`next`] puts peers into the [`AttemptPending`] state.
     pub async fn update_initial(&mut self, fanout_limit: usize) -> Result<(), BoxError> {
         self.update_timeout(Some(fanout_limit)).await
     }
@@ -173,7 +177,7 @@ where
     /// Update the peer set from the network, limiting the fanout to
     /// `fanout_limit`, and imposing a timeout on the entire fanout.
     ///
-    /// See `update_initial` for details.
+    /// See [`update_initial`] for details.
     async fn update_timeout(&mut self, fanout_limit: Option<usize>) -> Result<(), BoxError> {
         // CORRECTNESS
         //
@@ -197,11 +201,11 @@ where
     /// Update the peer set from the network, limiting the fanout to
     /// `fanout_limit`.
     ///
-    /// See `update_initial` for details.
+    /// See [`update_initial`] for details.
     ///
     /// # Correctness
     ///
-    /// This function does not have a timeout. Use `update_timeout` instead.
+    /// This function does not have a timeout. Use [`update_timeout`] instead.
     async fn update_fanout(&mut self, fanout_limit: Option<usize>) -> Result<(), BoxError> {
         // Opportunistically crawl the network on every update call to ensure
         // we're actively fetching peers. Continue independently of whether we
@@ -261,28 +265,29 @@ where
 
     /// Returns the next candidate for a connection attempt, if any are available.
     ///
-    /// Returns peers in this order:
-    /// - oldest `Responded` that are not live
-    /// - newest `NeverAttemptedGossiped`
-    /// - newest `NeverAttemptedAlternate`
-    /// - oldest `Failed` that are not recent
-    /// - oldest `AttemptPending` that are not recent
+    /// Returns peers in [`MetaAddr::cmp`] order, lowest first:
+    /// - oldest [`Responded`] that are not live
+    /// - [`NeverAttemptedSeed`], if any
+    /// - newest [`NeverAttemptedGossiped`]
+    /// - newest [`NeverAttemptedAlternate`]
+    /// - oldest [`Failed`] that are not recent
+    /// - oldest [`AttemptPending`] that are not recent
     ///
     /// Skips peers that have recently been attempted, connected, or failed.
     ///
     /// ## Correctness
     ///
-    /// `AttemptPending` peers will become `Responded` if they respond, or
-    /// become `Failed` if they time out or provide a bad response.
+    /// [`AttemptPending`] peers will become [`Responded`] if they respond, or
+    /// become [`Failed`] if they time out or provide a bad response.
     ///
-    /// Live `Responded` peers will stay live if they keep responding, or
+    /// Live [`Responded`] peers will stay live if they keep responding, or
     /// become a connection candidate if they stop responding.
     ///
     /// ## Security
     ///
     /// Zebra resists distributed denial of service attacks by making sure that
     /// new peer connections are initiated at least
-    /// `MIN_PEER_CONNECTION_INTERVAL` apart.
+    /// [`MIN_PEER_CONNECTION_INTERVAL`] apart.
     pub async fn next(&mut self) -> Option<MetaAddr> {
         let current_deadline = self.next_peer_min_wait.deadline();
         let mut sleep = sleep_until(current_deadline + Self::MIN_PEER_CONNECTION_INTERVAL);

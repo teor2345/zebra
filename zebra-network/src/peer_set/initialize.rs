@@ -212,7 +212,7 @@ where
 /// Use the provided `outbound_connector` to connect to `initial_peers`, then
 /// send the results over `peerset_tx`.
 ///
-/// Also adds those peers to the `AddressBook` using `timestamp_collector`,
+/// Also adds those peers to the [`AddressBook`] using `timestamp_collector`,
 /// and updates `success_count_tx` with the number of successful peers.
 #[instrument(skip(
     initial_peers,
@@ -359,7 +359,7 @@ where
 /// Zcash peer.
 ///
 /// Uses `handshaker` to perform a Zcash network protocol handshake, and sends
-/// the `Client` result over `tx`.
+/// the [`peer::Client`] result over `tx`.
 #[instrument(skip(tx, handshaker))]
 async fn listen<S>(
     addr: SocketAddr,
@@ -434,7 +434,7 @@ enum CrawlerAction {
 }
 
 /// Given a channel `demand_rx` that signals a need for new peers, try to find
-/// and connect to new peers, and send the resulting `peer::Client`s through the
+/// and connect to new peers, and send the resulting [`peer::Client`s through the
 /// `peerset_tx` channel.
 ///
 /// Crawl for new peers every `crawl_new_peer_interval`, and whenever there is
@@ -444,7 +444,7 @@ enum CrawlerAction {
 /// If a handshake fails, restore the unused demand signal by sending it to
 /// `demand_tx`.
 ///
-/// The crawler terminates when `candidates.update()` or `peerset_tx` returns a
+/// The crawler terminates when [`CandidateSet.update`] or `peerset_tx` returns a
 /// permanent internal error. Transient errors and individual peer errors should
 /// be handled within the crawler.
 #[instrument(skip(demand_tx, demand_rx, candidates, outbound_connector, peerset_tx))]
@@ -585,8 +585,8 @@ where
 
 /// Try to connect to `candidate` using `outbound_connector`.
 ///
-/// Returns a `HandshakeConnected` action on success, and a
-/// `HandshakeFailed` action on error.
+/// Returns a [`HandshakeConnected`] action on success, and a
+/// [`HandshakeFailed`] action on error.
 #[instrument(skip(outbound_connector,))]
 async fn dial<C>(candidate: MetaAddr, mut outbound_connector: C) -> CrawlerAction
 where

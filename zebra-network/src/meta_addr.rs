@@ -1,6 +1,6 @@
 //! An address-with-metadata type used in Bitcoin networking.
 //!
-//! In Zebra, `MetaAddr`s also track Zebra-specific peer state.
+//! In Zebra, [`MetaAddr`]s also track Zebra-specific peer state.
 
 use std::{
     cmp::{Ord, Ordering},
@@ -57,10 +57,10 @@ pub enum PeerAddrState {
     ///
     /// Zebra attempts to connect to all seed peers on startup. As part of these
     /// connection attempts, the initial peer connector updates all seed peers to
-    /// `AttemptPending`.
+    /// [`AttemptPending`].
     ///
     /// If any seed addresses remain in the address book, they are attempted after
-    /// disconnected `Responded` peers.
+    /// disconnected [`Responded`] peers.
     NeverAttemptedSeed,
 
     /// The peer's address has just been fetched via peer gossip, but we haven't
@@ -69,32 +69,32 @@ pub enum PeerAddrState {
     /// Gossiped addresses are attempted after seed addresses.
     NeverAttemptedGossiped {
         /// The time that another node claims to have connected to this peer.
-        /// See `get_untrusted_last_seen` for details.
+        /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "datetime_u32()")
         )]
         untrusted_last_seen: DateTime<Utc>,
         /// The services another node claims this peer advertises.
-        /// See `get_services` for details.
+        /// See [`get_services`] for details.
         untrusted_services: PeerServices,
     },
 
-    /// The peer's address has just been received as part of a `Version` message,
+    /// The peer's address has just been received as part of a [`Version`] message,
     /// so we might already be connected to this peer.
     ///
     /// Alternate addresses are attempted after gossiped addresses.
     NeverAttemptedAlternate {
         /// The last time another node gave us this address as their canonical
         /// address.
-        /// See `get_untrusted_last_seen` for details.
+        /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "datetime_u32()")
         )]
         untrusted_last_seen: DateTime<Utc>,
         /// The services another node gave us along with their canonical address.
-        /// See `get_services` for details.
+        /// See [`get_services`] for details.
         untrusted_services: PeerServices,
     },
 
@@ -103,115 +103,115 @@ pub enum PeerAddrState {
     /// Pending addresses are retried last.
     AttemptPending {
         /// The last time we made an outbound attempt to this peer.
-        /// See `get_last_attempt` for details.
+        /// See [`get_last_attempt`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "datetime_full()")
         )]
         last_attempt: DateTime<Utc>,
         /// The last time we made a successful outbound connection to this peer.
-        /// See `get_last_success` for details.
+        /// See [`get_last_success`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "option::of(datetime_full())")
         )]
         last_success: Option<DateTime<Utc>>,
         /// The last time an outbound connection to this peer failed.
-        /// See `get_last_failed` for details.
+        /// See [`get_last_failed`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "option::of(datetime_full())")
         )]
         last_failed: Option<DateTime<Utc>>,
         /// The last time another node claimed this peer was valid.
-        /// See `get_untrusted_last_seen` for details.
+        /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "option::of(datetime_u32())")
         )]
         untrusted_last_seen: Option<DateTime<Utc>>,
         /// The services another node claims this peer advertises.
-        /// See `get_services` for details.
+        /// See [`get_services`] for details.
         untrusted_services: Option<PeerServices>,
     },
 
     /// The peer has sent us a valid message.
     ///
     /// Peers remain in this state, even if they stop responding to requests.
-    /// (Peer liveness is derived from the `last_success` time, and the current
+    /// (Peer liveness is derived from the [`last_success`] time, and the current
     /// time.)
     ///
     /// Disconnected responded peers are retried first.
     Responded {
         /// The last time we made an outbound attempt to this peer.
-        /// See `get_last_attempt` for details.
+        /// See [`get_last_attempt`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "datetime_full()")
         )]
         last_attempt: DateTime<Utc>,
         /// The last time we made a successful outbound connection to this peer.
-        /// See `get_last_success` for details.
+        /// See [`get_last_success`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "datetime_full()")
         )]
         last_success: DateTime<Utc>,
         /// The last time an outbound connection to this peer failed.
-        /// See `get_last_failed` for details.
+        /// See [`get_last_failed`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "option::of(datetime_full())")
         )]
         last_failed: Option<DateTime<Utc>>,
         /// The last time another node claimed this peer was valid.
-        /// See `get_untrusted_last_seen` for details.
+        /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "option::of(datetime_u32())")
         )]
         untrusted_last_seen: Option<DateTime<Utc>>,
         /// The services advertised by this directly connected peer.
-        /// See `get_services` for details.
+        /// See [`get_services`] for details.
         services: PeerServices,
     },
 
     /// The peer's TCP connection failed, or the peer sent us an unexpected
     /// Zcash protocol message, so we failed the connection.
     ///
-    /// Failed peers are retried after disconnected `Responded` and never
+    /// Failed peers are retried after disconnected [`Responded`] and never
     /// attempted peers.
     Failed {
         /// The last time we made an outbound attempt to this peer.
-        /// See `get_last_attempt` for details.
+        /// See [`get_last_attempt`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "datetime_full()")
         )]
         last_attempt: DateTime<Utc>,
         /// The last time we made a successful outbound connection to this peer.
-        /// See `get_last_success` for details.
+        /// See [`get_last_success`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "option::of(datetime_full())")
         )]
         last_success: Option<DateTime<Utc>>,
         /// The last time an outbound connection to this peer failed.
-        /// See `get_last_failed` for details.
+        /// See [`get_last_failed`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "datetime_full()")
         )]
         last_failed: DateTime<Utc>,
         /// The last time another node claimed this peer was valid.
-        /// See `get_untrusted_last_seen` for details.
+        /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
             proptest(strategy = "option::of(datetime_u32())")
         )]
         untrusted_last_seen: Option<DateTime<Utc>>,
         /// The services claimed by another peer or advertised by this peer.
-        /// See `get_services` for details.
+        /// See [`get_services`] for details.
         //
         // TODO: do we need to distinguish direct and untrusted services?
         untrusted_services: Option<PeerServices>,
@@ -222,8 +222,8 @@ impl PeerAddrState {
     /// The last time we attempted to make a direct outbound connection to the
     /// address of this peer.
     ///
-    /// Only updated by the `AttemptPending` state.
-    /// Also present in `Responded` and `Failed`.
+    /// Only updated by the [`AttemptPending`] state.
+    /// Also present in [`Responded`] and [`Failed`].
     pub fn get_last_attempt(&self) -> Option<DateTime<Utc>> {
         match self {
             NeverAttemptedSeed => None,
@@ -238,8 +238,8 @@ impl PeerAddrState {
     /// The last time we successfully made a direct outbound connection to the
     /// address of this peer.
     ///
-    /// Only updated by the `Responded` state.
-    /// Also optionally present in `Failed` and `AttemptPending`.
+    /// Only updated by the [`Responded`] state.
+    /// Also optionally present in [`Failed`] and [`AttemptPending`].
     pub fn get_last_success(&self) -> Option<DateTime<Utc>> {
         match self {
             NeverAttemptedSeed => None,
@@ -254,8 +254,8 @@ impl PeerAddrState {
     /// The last time a direct outbound connection to the address of this peer
     /// failed.
     ///
-    /// Only updated by the `Failed` state.
-    /// Also optionally present in `AttemptPending` and `Responded`.
+    /// Only updated by the [`Failed`] state.
+    /// Also optionally present in [`AttemptPending`] and [`Responded`].
     pub fn get_last_failed(&self) -> Option<DateTime<Utc>> {
         match self {
             NeverAttemptedSeed => None,
@@ -269,10 +269,10 @@ impl PeerAddrState {
 
     /// The last time another peer successfully connected to this peer.
     ///
-    /// Only updated by the `NeverAttemptedGossiped` and
-    /// `NeverAttemptedAlternate` states.
+    /// Only updated by the [`NeverAttemptedGossiped`] and
+    /// [`NeverAttemptedAlternate`] states.
     ///
-    /// Optionally present in the `AttemptPending`, `Responded`, and `Failed`
+    /// Optionally present in the [`AttemptPending`, [`Responded`, and [`Failed`]
     /// states.
     pub fn get_untrusted_last_seen(&self) -> Option<DateTime<Utc>> {
         match self {
@@ -300,10 +300,10 @@ impl PeerAddrState {
         }
     }
 
-    /// Only updated by the `NeverAttemptedGossiped` and
-    /// `NeverAttemptedAlternate` states.
+    /// Only updated by the [`NeverAttemptedGossiped`] and
+    /// [`NeverAttemptedAlternate`] states.
     ///
-    /// Optionally present in the `AttemptPending`, `Responded`, and `Failed`
+    /// Optionally present in the [`AttemptPending`, [`Responded`, and [`Failed`]
     /// states.
     pub fn get_untrusted_services(&self) -> Option<PeerServices> {
         match self {
@@ -337,7 +337,7 @@ impl Default for PeerAddrState {
 }
 
 impl Ord for PeerAddrState {
-    /// `PeerAddrState`s are sorted in approximate reconnection attempt
+    /// [`PeerAddrState`s are sorted in approximate reconnection attempt
     /// order, ignoring liveness.
     ///
     /// See [`CandidateSet`] and [`MetaAddr::cmp`] for more details.
@@ -418,35 +418,35 @@ impl PartialEq for PeerAddrState {
 
 impl Eq for PeerAddrState {}
 
-/// A change to a `MetaAddr` in an `AddressBook`.
+/// A change to a [`MetaAddr`] in an [`AddressBook`].
 ///
-/// Most `PeerAddrState`s have a corresponding `Change`:
+/// Most [`PeerAddrState`s have a corresponding [`Change`]:
 /// - `New...` changes create a new address book entry, or add fields to an
 ///   existing `NeverAttempted...` address book entry.
 /// - `Update...` changes update the state, and add or update fields in an
 ///   existing address book entry.
-/// The `UpdateShutdown` preserves the `Responded` state, but changes all
-/// other states to `Failed`.
+/// The [`UpdateShutdown`] preserves the [`Responded`] state, but changes all
+/// other states to [`Failed`].
 ///
 /// See the [`CandidateSet`] for a detailed peer state diagram.
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub enum MetaAddrChange {
-    /// A new seed peer `MetaAddr`.
+    /// A new seed peer [`MetaAddr`].
     ///
-    /// The `initial_peers` config provides the address.
+    /// The initial peers config provides the address.
     /// Gossiped or alternate changes can provide missing services.
     /// (But they can't update an existing service value.)
     /// Existing services can be updated by future handshakes with this peer.
     ///
-    /// Sets the untrusted last seen time and services to `None`.
+    /// Sets the untrusted last seen time and services to [`None`].
     NewSeed { addr: SocketAddr },
 
-    /// A new gossiped peer `MetaAddr`.
+    /// A new gossiped peer [`MetaAddr`].
     ///
-    /// `Addr` messages provide an address, services, and a last seen time.
+    /// [`Addr`] messages provide an address, services, and a last seen time.
     /// The services can be updated by future handshakes with this peer.
-    /// The untrusted last seen time is overridden by any `last_success` time.
+    /// The untrusted last seen time is overridden by any last success time.
     NewGossiped {
         addr: SocketAddr,
         untrusted_services: PeerServices,
@@ -457,9 +457,9 @@ pub enum MetaAddrChange {
         untrusted_last_seen: DateTime<Utc>,
     },
 
-    /// A new alternate peer `MetaAddr`.
+    /// A new alternate peer [`MetaAddr`].
     ///
-    /// `Version` messages provide the canonical address and its services.
+    /// [`Version`] messages provide the canonical address and its services.
     /// The services can be updated by future handshakes with this peer.
     ///
     /// Sets the untrusted last seen time to the current time.
@@ -499,8 +499,8 @@ pub enum MetaAddrChange {
     ///
     /// If the handshake with this peer succeeded, update its services.
     ///
-    /// If the peer is in the `Responded` state, do nothing.
-    /// Otherwise, mark the peer as `Failed`, and set the last failed time to the
+    /// If the peer is in the [`Responded`] state, do nothing.
+    /// Otherwise, mark the peer as [`Failed`, and set the last failed time to the
     /// current time.
     UpdateShutdown {
         addr: SocketAddr,
@@ -557,7 +557,7 @@ impl MetaAddrChange {
 
     /// Is this address valid for outbound connections?
     ///
-    /// `book_entry` is the entry for `self.get_addr()` in the address book.
+    /// `book_entry` is the entry for [`self.get_addr`] in the address book.
     ///
     /// Assmes that missing fields or entries are valid.
     pub fn is_valid_for_outbound(&self, book_entry: &Option<&MetaAddr>) -> bool {
@@ -570,7 +570,7 @@ impl MetaAddrChange {
 
     /// Is this address a directly connected client?
     ///
-    /// `book_entry` is the entry for `self.get_addr()` in the address book.
+    /// `book_entry` is the entry for [`self.get_addr`] in the address book.
     ///
     /// Assmes that missing fields or entries are not clients.
     pub fn is_direct_client(&self, book_entry: &Option<&MetaAddr>) -> bool {
@@ -583,7 +583,7 @@ impl MetaAddrChange {
 
     /// Apply this change to `old_entry`, returning an updated entry.
     ///
-    /// `None` means "no update".
+    /// [`None`] means "no update".
     ///
     /// Ignores out-of-order updates:
     /// - the same address can arrive from multiple sources,
@@ -745,19 +745,19 @@ impl MetaAddrChange {
 pub struct MetaAddr {
     /// The peer's address.
     ///
-    /// The exact meaning depends on `last_connection_state`:
-    ///   - `Responded`: the address we used to make a direct outbound connection
+    /// The exact meaning depends on [`last_connection_state`]:
+    ///   - [`Responded`]: the address we used to make a direct outbound connection
     ///      to this peer
-    ///   - `NeverAttemptedSeed: an unverified address provided by the seed config
-    ///   - `NeverAttemptedGossiped`: an unverified address and services provided
+    ///   - [`NeverAttemptedSeed: an unverified address provided by the seed config
+    ///   - [`NeverAttemptedGossiped`]: an unverified address and services provided
     ///      by a remote peer
-    ///   - `NeverAttemptedAlternate`: a directly connected peer claimed that
-    ///      this address was its canonical address in its `Version` message,
+    ///   - [`NeverAttemptedAlternate`]: a directly connected peer claimed that
+    ///      this address was its canonical address in its [`Version`] message,
     ///      (and provided services). But either:
     ///      - the peer made an inbound connection to us, or
     ///      - the address we used to make a direct outbound connection was
     ///        different from the canonical address
-    ///   - `Failed` or `AttemptPending`: an unverified seeder, gossiped or
+    ///   - [`Failed`] or [`AttemptPending`]: an unverified seeder, gossiped or
     ///      alternate address, or an address from a previous direct outbound
     ///      connection
     ///
@@ -779,11 +779,11 @@ pub struct MetaAddr {
 }
 
 impl MetaAddr {
-    /// Create a new `MetaAddr` from its parts.
+    /// Create a new [`MetaAddr`] from its parts.
     ///
-    /// This function should only be used by the `meta_addr` and `address_book`
-    /// modules. Other callers should use a more specific `MetaAddr` or
-    /// `MetaAddrChange` constructor.
+    /// This function should only be used by the [`meta_addr`] and [`address_book`]
+    /// modules. Other callers should use a more specific [`MetaAddr`] or
+    /// [`MetaAddrChange`] constructor.
     fn new(addr: &SocketAddr, last_connection_state: &PeerAddrState) -> MetaAddr {
         MetaAddr {
             addr: *addr,
@@ -791,7 +791,7 @@ impl MetaAddr {
         }
     }
 
-    /// Create a new seed `MetaAddr`, based on the configured seed addresses.
+    /// Create a new seed [`MetaAddr`, based on the configured seed addresses.
     pub fn new_seed_meta_addr(addr: &SocketAddr) -> MetaAddr {
         MetaAddr {
             addr: *addr,
@@ -799,10 +799,10 @@ impl MetaAddr {
         }
     }
 
-    /// Add or update an `AddressBook` entry, based on the address provided by
+    /// Add or update an [`AddressBook`] entry, based on the address provided by
     /// the seeder.
     ///
-    /// Panics unless `meta_addr` is in the `NeverAttemptedSeed` state.
+    /// Panics unless `meta_addr` is in the [`NeverAttemptedSeed`] state.
     pub fn new_seed_change(meta_addr: &MetaAddr) -> MetaAddrChange {
         if meta_addr.last_connection_state == NeverAttemptedSeed {
             NewSeed {
@@ -813,8 +813,8 @@ impl MetaAddr {
         }
     }
 
-    /// Create a new gossiped `MetaAddr`, based on the deserialized fields from
-    /// a peer `Addr` message.
+    /// Create a new gossiped [`MetaAddr`, based on the deserialized fields from
+    /// a peer [`Addr`] message.
     pub fn new_gossiped_meta_addr(
         addr: &SocketAddr,
         untrusted_services: &PeerServices,
@@ -829,10 +829,10 @@ impl MetaAddr {
         }
     }
 
-    /// Add or update an `AddressBook` entry, based on a gossiped peer `Addr`
+    /// Add or update an [`AddressBook`] entry, based on a gossiped peer [`Addr`]
     /// message.
     ///
-    /// Panics unless `meta_addr` is in the `NeverAttemptedGossiped` state.
+    /// Panics unless `meta_addr` is in the [`NeverAttemptedGossiped`] state.
     pub fn new_gossiped_change(meta_addr: &MetaAddr) -> MetaAddrChange {
         if let NeverAttemptedGossiped {
             untrusted_last_seen,
@@ -852,8 +852,8 @@ impl MetaAddr {
         }
     }
 
-    /// Add or update an `AddressBook` entry, based on the canonical address in a
-    /// peer's `Version` message.
+    /// Add or update an [`AddressBook`] entry, based on the canonical address in a
+    /// peer's [`Version`] message.
     pub fn new_alternate(addr: &SocketAddr, services: &PeerServices) -> MetaAddrChange {
         NewAlternate {
             addr: *addr,
@@ -861,12 +861,12 @@ impl MetaAddr {
         }
     }
 
-    /// Update an `AddressBook` entry when we start connecting to a peer.
+    /// Update an [`AddressBook`] entry when we start connecting to a peer.
     pub fn update_attempt(addr: &SocketAddr) -> MetaAddrChange {
         UpdateAttempt { addr: *addr }
     }
 
-    /// Update an `AddressBook` entry when a peer sends a message after a
+    /// Update an [`AddressBook`] entry when a peer sends a message after a
     /// successful handshake.
     ///
     /// # Security
@@ -875,7 +875,7 @@ impl MetaAddr {
     /// and the services must be the services from that peer's handshake.
     ///
     /// Otherwise:
-    /// - malicious peers could interfere with other peers' `AddressBook` state,
+    /// - malicious peers could interfere with other peers' [`AddressBook`] state,
     ///   or
     /// - Zebra could advertise unreachable addresses to its own peers.
     pub fn update_responded(addr: &SocketAddr, services: &PeerServices) -> MetaAddrChange {
@@ -885,7 +885,7 @@ impl MetaAddr {
         }
     }
 
-    /// Update an `AddressBook` entry when a peer connection fails.
+    /// Update an [`AddressBook`] entry when a peer connection fails.
     pub fn update_failed(addr: &SocketAddr, services: &Option<PeerServices>) -> MetaAddrChange {
         UpdateFailed {
             addr: *addr,
@@ -893,7 +893,7 @@ impl MetaAddr {
         }
     }
 
-    /// Update an `AddressBook` entry when a peer connection shuts down.
+    /// Update an [`AddressBook`] entry when a peer connection shuts down.
     pub fn update_shutdown(addr: &SocketAddr, services: &Option<PeerServices>) -> MetaAddrChange {
         UpdateShutdown {
             addr: *addr,
@@ -901,9 +901,9 @@ impl MetaAddr {
         }
     }
 
-    /// Add or update our local listener address in an `AddressBook`.
+    /// Add or update our local listener address in an [`AddressBook`].
     ///
-    /// See `AddressBook::get_local_listener` for details.
+    /// See [`AddressBook::get_local_listener`] for details.
     pub fn new_local_listener(addr: &SocketAddr) -> MetaAddrChange {
         NewAlternate {
             addr: *addr,
@@ -916,17 +916,17 @@ impl MetaAddr {
 
     /// The services advertised by the peer.
     ///
-    /// The exact meaning depends on `last_connection_state`:
-    ///   - `Responded`: the services advertised by this peer, the last time we
+    /// The exact meaning depends on [`last_connection_state`]:
+    ///   - [`Responded`]: the services advertised by this peer, the last time we
     ///      performed a handshake with it
-    ///   - `NeverAttemptedGossiped`: the unverified services provided by the
+    ///   - [`NeverAttemptedGossiped`]: the unverified services provided by the
     ///      remote peer that sent us this address
-    ///   - `NeverAttemptedAlternate`: the services provided by the directly
+    ///   - [`NeverAttemptedAlternate`]: the services provided by the directly
     ///      connected peer that claimed that this address was its canonical
     ///      address
-    ///   - `NeverAttemptedSeed`: the seed config doesn't have any service info,
-    ///      so this field is `None`
-    ///   - `Failed` or `AttemptPending`: unverified services via another peer,
+    ///   - [`NeverAttemptedSeed`]: the seed config doesn't have any service info,
+    ///      so this field is [`None`]
+    ///   - [`Failed`] or [`AttemptPending`]: unverified services via another peer,
     ///      or services advertised in a previous handshake
     ///
     /// ## Security
@@ -941,7 +941,7 @@ impl MetaAddr {
     /// The last time we attempted to make a direct outbound connection to the
     /// address of this peer.
     ///
-    /// See `PeerAddrState::get_last_attempt` for details.
+    /// See [`PeerAddrState::get_last_attempt`] for details.
     pub fn get_last_attempt(&self) -> Option<DateTime<Utc>> {
         self.last_connection_state.get_last_attempt()
     }
@@ -949,7 +949,7 @@ impl MetaAddr {
     /// The last time we successfully made a direct outbound connection to the
     /// address of this peer.
     ///
-    /// See `PeerAddrState::get_last_success` for details.
+    /// See [`PeerAddrState::get_last_success`] for details.
     pub fn get_last_success(&self) -> Option<DateTime<Utc>> {
         self.last_connection_state.get_last_success()
     }
@@ -957,21 +957,21 @@ impl MetaAddr {
     /// The last time a direct outbound connection to the address of this peer
     /// failed.
     ///
-    /// See `PeerAddrState::get_last_failed` for details.
+    /// See [`PeerAddrState::get_last_failed`] for details.
     pub fn get_last_failed(&self) -> Option<DateTime<Utc>> {
         self.last_connection_state.get_last_failed()
     }
 
     /// The last time another node claimed this peer was valid.
     ///
-    /// The exact meaning depends on `last_connection_state`:
-    ///   - `NeverAttemptedSeed`: the seed config doesn't have any last seen info,
-    ///      so this field is `None`
-    ///   - `NeverAttemptedGossiped`: the unverified time provided by the remote
+    /// The exact meaning depends on [`last_connection_state`]:
+    ///   - [`NeverAttemptedSeed`]: the seed config doesn't have any last seen info,
+    ///      so this field is [`None`]
+    ///   - [`NeverAttemptedGossiped`]: the unverified time provided by the remote
     ///      peer that sent us this address
-    ///   - `NeverAttemptedAlternate`: the local time we received the `Version`
+    ///   - [`NeverAttemptedAlternate`]: the local time we received the [`Version`]
     ///      message containing this address from a peer
-    ///   - `Failed` and `AttemptPending`: these states do not update this field
+    ///   - [`Failed`] and [`AttemptPending`]: these states do not update this field
     ///
     /// ## Security
     ///
@@ -987,16 +987,16 @@ impl MetaAddr {
     /// The last time we successfully made a direct outbound connection to this
     /// peer, or another node claimed this peer was valid.
     ///
-    /// Clamped to a `u32` number of seconds.
+    /// Clamped to a [`u32`] number of seconds.
     ///
-    /// `None` if the address was supplied as a seed.
+    /// [`None`] if the address was supplied as a seed.
     ///
     /// ## Security
     ///
     /// last seen times from non-`Responded` peers may be invalid due to
     /// clock skew, or buggy or malicious peers.
     ///
-    /// Use `get_last_success` if you need a trusted, unclamped value.
+    /// Use [`get_last_success`] if you need a trusted, unclamped value.
     pub fn get_last_success_or_untrusted(&self) -> Option<DateTime<Utc>> {
         // Use the best time we have, if any
         let seconds = self
@@ -1044,9 +1044,9 @@ impl MetaAddr {
             && self.addr.port() != 0
     }
 
-    /// Return a sanitized version of this `MetaAddr`, for sending to a remote peer.
+    /// Return a sanitized version of this [`MetaAddr`, for sending to a remote peer.
     ///
-    /// If `None`, this address should not be sent to remote peers.
+    /// If [`None`, this address should not be sent to remote peers.
     pub fn sanitize(&self) -> Option<MetaAddr> {
         // Sanitize the time
         let interval = crate::constants::TIMESTAMP_TRUNCATION_SECONDS;
@@ -1067,8 +1067,8 @@ impl MetaAddr {
 }
 
 impl Ord for MetaAddr {
-    /// `MetaAddr`s are sorted in approximate reconnection attempt order, but
-    /// with `Responded` peers sorted first as a group.
+    /// [`MetaAddr`s are sorted in approximate reconnection attempt order, but
+    /// with [`Responded`] peers sorted first as a group.
     ///
     /// This order should not be used for reconnection attempts: use
     /// [`AddressBook::reconnection_peers`] instead.

@@ -1,4 +1,4 @@
-//! The `AddressBook` manages information about what peers exist, when they were
+//! The [`AddressBook`] manages information about what peers exist, when they were
 //! seen, and what services they provide.
 
 use std::{collections::HashMap, iter::Extend, net::SocketAddr, time::Instant};
@@ -19,7 +19,7 @@ use proptest_derive::Arbitrary;
 /// Address book state must be based on outbound connections to peers.
 ///
 /// If the address book is updated incorrectly:
-/// - malicious peers can interfere with other peers' `AddressBook` state,
+/// - malicious peers can interfere with other peers' [`AddressBook`] state,
 ///   or
 /// - Zebra can advertise unreachable addresses to its own peers.
 ///
@@ -29,7 +29,7 @@ use proptest_derive::Arbitrary;
 /// on the configured network. These addresses can come from:
 /// - the initial seed peers config
 /// - addresses gossiped by other peers
-/// - the canonical address (`Version.address_from`) provided by each peer,
+/// - the canonical address ([`Version.address_from`]) provided by each peer,
 ///   particularly peers on inbound connections.
 ///
 /// The remote addresses of inbound connections must not be added to the address
@@ -49,7 +49,7 @@ use proptest_derive::Arbitrary;
 #[derive(Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub struct AddressBook {
-    /// Each known peer address has a matching `MetaAddr`.
+    /// Each known peer address has a matching [`MetaAddr`].
     by_addr: HashMap<SocketAddr, MetaAddr>,
 
     /// The local listener address.
@@ -69,22 +69,22 @@ pub struct AddressBook {
 /// Metrics about the states of the addresses in an [`AddressBook`].
 #[derive(Copy, Clone, Debug)]
 pub struct AddressMetrics {
-    /// The number of addresses in the `Responded` state.
+    /// The number of addresses in the [`Responded`] state.
     responded: usize,
 
-    /// The number of addresses in the `NeverAttemptedSeed` state.
+    /// The number of addresses in the [`NeverAttemptedSeed`] state.
     never_attempted_seed: usize,
 
-    /// The number of addresses in the `NeverAttemptedGossiped` state.
+    /// The number of addresses in the [`NeverAttemptedGossiped`] state.
     never_attempted_gossiped: usize,
 
-    /// The number of addresses in the `NeverAttemptedAlternate` state.
+    /// The number of addresses in the [`NeverAttemptedAlternate`] state.
     never_attempted_alternate: usize,
 
-    /// The number of addresses in the `Failed` state.
+    /// The number of addresses in the [`Failed`] state.
     failed: usize,
 
-    /// The number of addresses in the `AttemptPending` state.
+    /// The number of addresses in the [`AttemptPending`] state.
     attempt_pending: usize,
 
     /// The number of peers that we've tried to connect to recently.
@@ -101,7 +101,7 @@ pub struct AddressMetrics {
 }
 
 impl AddressBook {
-    /// Construct an `AddressBook` with the given `config` and [`tracing::Span`].
+    /// Construct an [`AddressBook`] with the given `config` and [`tracing::Span`].
     pub fn new(config: &Config, span: Span) -> AddressBook {
         let constructor_span = span.clone();
         let _guard = constructor_span.enter();
@@ -118,14 +118,14 @@ impl AddressBook {
     }
 
     /// Returns a Change that adds or updates the local listener address in an
-    /// `AddressBook`.
+    /// [`AddressBook`].
     ///
     /// Our inbound listener port can be advertised to peers by applying this
     /// change to the inbound request address book.
     ///
     /// # Correctness
     ///
-    /// Avoid inserting this address into the local `AddressBook`.
+    /// Avoid inserting this address into the local [`AddressBook`].
     /// (If peers gossip our address back to us, the handshake nonce will
     /// protect us from self-connections.)
     pub fn get_local_listener(&self) -> MetaAddrChange {
@@ -152,7 +152,7 @@ impl AddressBook {
         self.by_addr.contains_key(addr)
     }
 
-    /// Returns the entry corresponding to `addr`, or `None` if it does not exist.
+    /// Returns the entry corresponding to `addr`, or [`None`] if it does not exist.
     pub fn get_by_addr(&self, addr: SocketAddr) -> Option<MetaAddr> {
         let _guard = self.span.enter();
         self.by_addr.get(&addr).cloned()
@@ -208,7 +208,7 @@ impl AddressBook {
     ///
     /// # Note
     ///
-    /// All address removals should go through `take`, so that the address
+    /// All address removals should go through [`take`], so that the address
     /// book metrics are accurate.
     fn take(&mut self, removed_addr: SocketAddr) -> Option<MetaAddr> {
         let _guard = self.span.enter();
