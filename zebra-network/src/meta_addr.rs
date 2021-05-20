@@ -90,7 +90,7 @@ pub enum PeerAddrState {
         /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
-            proptest(strategy = "datetime_u32()")
+            proptest(strategy = "datetime_full()")
         )]
         untrusted_last_seen: DateTime<Utc>,
         /// The services another node gave us along with their canonical address.
@@ -98,7 +98,7 @@ pub enum PeerAddrState {
         untrusted_services: PeerServices,
     },
 
-    /// We have started a connection attempt to this peer.
+    /// We are about to start a connection attempt to this peer.
     ///
     /// Pending addresses are retried last.
     AttemptPending {
@@ -127,7 +127,7 @@ pub enum PeerAddrState {
         /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
-            proptest(strategy = "option::of(datetime_u32())")
+            proptest(strategy = "option::of(datetime_full())")
         )]
         untrusted_last_seen: Option<DateTime<Utc>>,
         /// The services another node claims this peer advertises.
@@ -168,7 +168,7 @@ pub enum PeerAddrState {
         /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
-            proptest(strategy = "option::of(datetime_u32())")
+            proptest(strategy = "option::of(datetime_full())")
         )]
         untrusted_last_seen: Option<DateTime<Utc>>,
         /// The services advertised by this directly connected peer.
@@ -207,7 +207,7 @@ pub enum PeerAddrState {
         /// See [`get_untrusted_last_seen`] for details.
         #[cfg_attr(
             any(test, feature = "proptest-impl"),
-            proptest(strategy = "option::of(datetime_u32())")
+            proptest(strategy = "option::of(datetime_full())")
         )]
         untrusted_last_seen: Option<DateTime<Utc>>,
         /// The services claimed by another peer or advertised by this peer.
