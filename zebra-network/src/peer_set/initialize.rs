@@ -242,12 +242,15 @@ where
         "connecting to initial peer set"
     );
 
-    // Add the DNS seeder peers to the address book, in the `AttemptPending` state.
+    // Add the seed peers to the address book, in the `AttemptPending` state.
+    //
+    // Note: these address book updates are sent to a channel, so they might be
+    // applied after updates from concurrent tasks.
     let mut initial_meta_addr = Vec::new();
     for addr in initial_peers {
-        let seeder_meta_addr = MetaAddr::new_dns_seeder_meta_addr(&addr);
+        let seeder_meta_addr = MetaAddr::new_seed_meta_addr(&addr);
         let _ = timestamp_collector
-            .send(MetaAddr::new_dns_seeder_change(&seeder_meta_addr))
+            .send(MetaAddr::new_seed_change(&seeder_meta_addr))
             .await;
         let update_change = MetaAddr::update_attempt(&addr);
         let _ = timestamp_collector.send(update_change).await;

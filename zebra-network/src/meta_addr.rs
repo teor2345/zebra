@@ -42,19 +42,25 @@ mod tests;
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub enum PeerAddrState {
-    /// The peer's address has just been fetched from a DNS seeder.
+    /// The peer's address is a seed address.
     ///
-    /// Zebra attempts to connect to all DNS seeder peers on startup. So the
-    /// initial peer connector updates all DNS seeder peers to `AttemptPending`.
+    /// Seed addresses can come from:
+    /// - hard-coded IP addresses in the config,
+    /// - DNS names that resolve to a single peer, or
+    /// - DNS seeders, which resolve to a dynamic list of peers.
     ///
-    /// If any DNS seeder addresses remain, they are attempted after disconnected
-    /// `Responded` peers.
-    NeverAttemptedDnsSeeder,
+    /// Zebra attempts to connect to all seed peers on startup. As part of these
+    /// connection attempts, the initial peer connector updates all seed peers to
+    /// `AttemptPending`.
+    ///
+    /// If any seed addresses remain in the address book, they are attempted after
+    /// disconnected `Responded` peers.
+    NeverAttemptedSeed,
 
     /// The peer's address has just been fetched via peer gossip, but we haven't
     /// attempted to connect to it yet.
     ///
-    /// Gossiped addresses are attempted after DNS seeder addresses.
+    /// Gossiped addresses are attempted after seed addresses.
     NeverAttemptedGossiped {
         /// The time that another node claims to have connected to this peer.
         /// See `get_untrusted_last_seen` for details.
@@ -214,7 +220,7 @@ impl PeerAddrState {
     /// Also present in `Responded` and `Failed`.
     pub fn get_last_attempt(&self) -> Option<DateTime<Utc>> {
         match self {
-            NeverAttemptedDnsSeeder => None,
+            NeverAttemptedSeed => None,
             NeverAttemptedGossiped { .. } => None,
             NeverAttemptedAlternate { .. } => None,
             AttemptPending { last_attempt, .. } => Some(*last_attempt),
@@ -230,7 +236,7 @@ impl PeerAddrState {
     /// Also optionally present in `Failed` and `AttemptPending`.
     pub fn get_last_success(&self) -> Option<DateTime<Utc>> {
         match self {
-            NeverAttemptedDnsSeeder => None,
+            NeverAttemptedSeed => None,
             NeverAttemptedGossiped { .. } => None,
             NeverAttemptedAlternate { .. } => None,
             AttemptPending { last_success, .. } => *last_success,
@@ -246,7 +252,7 @@ impl PeerAddrState {
     /// Also optionally present in `AttemptPending` and `Responded`.
     pub fn get_last_failed(&self) -> Option<DateTime<Utc>> {
         match self {
-            NeverAttemptedDnsSeeder => None,
+            NeverAttemptedSeed => None,
             NeverAttemptedGossiped { .. } => None,
             NeverAttemptedAlternate { .. } => None,
             AttemptPending { last_failed, .. } => *last_failed,
@@ -264,7 +270,7 @@ impl PeerAddrState {
     /// states.
     pub fn get_untrusted_last_seen(&self) -> Option<DateTime<Utc>> {
         match self {
-            NeverAttemptedDnsSeeder => None,
+            NeverAttemptedSeed => None,
             NeverAttemptedGossiped {
                 untrusted_last_seen,
                 ..
@@ -295,7 +301,7 @@ impl PeerAddrState {
     /// states.
     pub fn get_untrusted_services(&self) -> Option<PeerServices> {
         match self {
-            NeverAttemptedDnsSeeder => None,
+            NeverAttemptedSeed => None,
             NeverAttemptedGossiped {
                 untrusted_services, ..
             } => Some(*untrusted_services),
@@ -337,15 +343,15 @@ impl Ord for PeerAddrState {
             | (Failed { .. }, Failed { .. })
             | (NeverAttemptedGossiped { .. }, NeverAttemptedGossiped { .. })
             | (NeverAttemptedAlternate { .. }, NeverAttemptedAlternate { .. })
-            | (NeverAttemptedDnsSeeder, NeverAttemptedDnsSeeder)
+            | (NeverAttemptedSeed, NeverAttemptedSeed)
             | (AttemptPending { .. }, AttemptPending { .. }) => {}
 
             // We reconnect to `Responded` peers that have stopped sending messages,
             // then `NeverAttempted...` peers, then `Failed` peers
             (Responded { .. }, _) => return Less,
             (_, Responded { .. }) => return Greater,
-            (NeverAttemptedDnsSeeder, _) => return Less,
-            (_, NeverAttemptedDnsSeeder) => return Greater,
+            (NeverAttemptedSeed, _) => return Less,
+            (_, NeverAttemptedSeed) => return Greater,
             (NeverAttemptedGossiped { .. }, _) => return Less,
             (_, NeverAttemptedGossiped { .. }) => return Greater,
             (NeverAttemptedAlternate { .. }, _) => return Less,
@@ -412,15 +418,15 @@ impl Eq for PeerAddrState {}
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(any(test, feature = "proptest-impl"), derive(Arbitrary))]
 pub enum MetaAddrChange {
-    /// A new DNS seeder peer `MetaAddr`.
+    /// A new seed peer `MetaAddr`.
     ///
-    /// DNS seeders provide the address.
+    /// The `initial_peers` config provides the address.
     /// Gossiped or alternate changes can provide missing services.
     /// (But they can't update an existing service value.)
     /// Existing services can be updated by future handshakes with this peer.
     ///
     /// Sets the untrusted last seen time and services to `None`.
-    NewDnsSeeder { addr: SocketAddr },
+    NewSeed { addr: SocketAddr },
 
     /// A new gossiped peer `MetaAddr`.
     ///
@@ -492,7 +498,7 @@ impl MetaAddrChange {
     /// Return the address for the change.
     pub fn get_addr(&self) -> SocketAddr {
         match self {
-            NewDnsSeeder { addr, .. } => *addr,
+            NewSeed { addr, .. } => *addr,
             NewGossiped { addr, .. } => *addr,
             NewAlternate { addr, .. } => *addr,
             UpdateAttempt { addr } => *addr,
@@ -505,7 +511,7 @@ impl MetaAddrChange {
     /// Return the services for the change, if available.
     pub fn get_untrusted_services(&self) -> Option<PeerServices> {
         match self {
-            NewDnsSeeder { .. } => None,
+            NewSeed { .. } => None,
             NewGossiped {
                 untrusted_services, ..
             } => Some(*untrusted_services),
@@ -526,7 +532,7 @@ impl MetaAddrChange {
                 untrusted_last_seen,
                 ..
             } => Some(*untrusted_last_seen),
-            NewDnsSeeder { .. }
+            NewSeed { .. }
             | NewAlternate { .. }
             | UpdateAttempt { .. }
             | UpdateResponded { .. }
@@ -584,9 +590,9 @@ impl MetaAddrChange {
         let old_untrusted_services = old_entry.map(|old| old.get_untrusted_services()).flatten();
 
         match self {
-            // New DNS seeder, not in address book:
-            NewDnsSeeder { addr } if old_entry.is_none() => {
-                Some(MetaAddr::new(&addr, &NeverAttemptedDnsSeeder))
+            // New seed, not in address book:
+            NewSeed { addr } if old_entry.is_none() => {
+                Some(MetaAddr::new(&addr, &NeverAttemptedSeed))
             }
 
             // New gossiped or alternate, not attempted:
@@ -615,9 +621,9 @@ impl MetaAddrChange {
                 },
             )),
 
-            // New entry, but already existing (DNS) or attempted (others):
+            // New entry, but already existing (seed) or attempted (others):
             // Skip the update entirely
-            NewDnsSeeder { .. } | NewGossiped { .. } | NewAlternate { .. } => None,
+            NewSeed { .. } | NewGossiped { .. } | NewAlternate { .. } => None,
 
             // Attempt:
             // Update last_attempt
@@ -696,7 +702,7 @@ impl MetaAddrChange {
                     Some(AttemptPending { .. })
                     | Some(Failed { .. })
                     // Unexpected states: change to Failed anyway
-                    | Some(NeverAttemptedDnsSeeder)
+                    | Some(NeverAttemptedSeed)
                     | Some(NeverAttemptedGossiped { .. })
                     | Some(NeverAttemptedAlternate { .. })
                     | None => Some(MetaAddr::new(
@@ -750,7 +756,7 @@ pub struct MetaAddr {
     /// The outcome of our most recent direct outbound connection to this peer.
     ///
     /// If we haven't made a direct connection to this peer, contains untrusted
-    /// information provided by other peers (or DNS seeders).
+    /// information provided by other peers (or seeds).
     //
     // TODO: make the state private to MetaAddr and AddressBook
     pub(super) last_connection_state: PeerAddrState,
@@ -769,29 +775,25 @@ impl MetaAddr {
         }
     }
 
-    /// Create a new DNS seeder `MetaAddr`, based on the address provided by
-    /// the seeder.
-    pub fn new_dns_seeder_meta_addr(addr: &SocketAddr) -> MetaAddr {
+    /// Create a new seed `MetaAddr`, based on the configured seed addresses.
+    pub fn new_seed_meta_addr(addr: &SocketAddr) -> MetaAddr {
         MetaAddr {
             addr: *addr,
-            last_connection_state: NeverAttemptedDnsSeeder,
+            last_connection_state: NeverAttemptedSeed,
         }
     }
 
     /// Add or update an `AddressBook` entry, based on the address provided by
     /// the seeder.
     ///
-    /// Panics unless `meta_addr` is in the `NeverAttemptedDnsSeeder` state.
-    pub fn new_dns_seeder_change(meta_addr: &MetaAddr) -> MetaAddrChange {
-        if meta_addr.last_connection_state == NeverAttemptedDnsSeeder {
-            NewDnsSeeder {
+    /// Panics unless `meta_addr` is in the `NeverAttemptedSeed` state.
+    pub fn new_seed_change(meta_addr: &MetaAddr) -> MetaAddrChange {
+        if meta_addr.last_connection_state == NeverAttemptedSeed {
+            NewSeed {
                 addr: meta_addr.addr,
             }
         } else {
-            panic!(
-                "unexpected non-NeverAttemptedDnsSeeder state: {:?}",
-                meta_addr
-            )
+            panic!("unexpected non-NeverAttemptedSeed state: {:?}", meta_addr)
         }
     }
 
@@ -906,8 +908,8 @@ impl MetaAddr {
     ///   - `NeverAttemptedAlternate`: the services provided by the directly
     ///      connected peer that claimed that this address was its canonical
     ///      address
-    ///   - `NeverAttemptedDnsSeeder`: DNS seeders don't tell us the services for
-    ///      a peer, so this field is `None`
+    ///   - `NeverAttemptedSeed`: the seed config doesn't have any service info,
+    ///      so this field is `None`
     ///   - `Failed` or `AttemptPending`: unverified services via another peer,
     ///      or services advertised in a previous handshake
     ///
@@ -952,8 +954,8 @@ impl MetaAddr {
     ///      peer that sent us this address
     ///   - `NeverAttemptedAlternate`: the local time we received the `Version`
     ///      message containing this address from a peer
-    ///   - `NeverAttemptedDnsSeeder`: DNS seeders don't tell us the last seen
-    ///      time for a peer, so this field is `None`
+    ///   - `NeverAttemptedSeed`: the seed config doesn't have any last seen info,
+    ///      so this field is `None`
     ///   - `Failed` and `AttemptPending`: these states do not update this field
     ///
     /// ## Security
@@ -972,7 +974,7 @@ impl MetaAddr {
     ///
     /// Clamped to a `u32` number of seconds.
     ///
-    /// `None` if the address was supplied by a DNS seeder.
+    /// `None` if the address was supplied as a seed.
     ///
     /// ## Security
     ///
@@ -1008,7 +1010,7 @@ impl MetaAddr {
     pub fn is_direct_client(&self) -> bool {
         match self.last_connection_state {
             Responded { services, .. } => !services.contains(PeerServices::NODE_NETWORK),
-            NeverAttemptedDnsSeeder
+            NeverAttemptedSeed
             | NeverAttemptedGossiped { .. }
             | NeverAttemptedAlternate { .. }
             | Failed { .. }

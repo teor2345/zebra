@@ -27,7 +27,7 @@ use proptest_derive::Arbitrary;
 ///
 /// The address book should only contain Zcash listener port addresses from peers
 /// on the configured network. These addresses can come from:
-/// - DNS seeders
+/// - the initial seed peers config
 /// - addresses gossiped by other peers
 /// - the canonical address (`Version.address_from`) provided by each peer,
 ///   particularly peers on inbound connections.
@@ -70,8 +70,8 @@ pub struct AddressMetrics {
     /// The number of addresses in the `Responded` state.
     responded: usize,
 
-    /// The number of addresses in the `NeverAttemptedDnsSeeder` state.
-    never_attempted_dns_seeder: usize,
+    /// The number of addresses in the `NeverAttemptedSeed` state.
+    never_attempted_seed: usize,
 
     /// The number of addresses in the `NeverAttemptedGossiped` state.
     never_attempted_gossiped: usize,
@@ -375,12 +375,12 @@ impl AddressBook {
             .peers_unordered()
             .filter(|peer| matches!(peer.last_connection_state, PeerAddrState::Responded { .. }))
             .count();
-        let never_attempted_dns_seeder = self
+        let never_attempted_seed = self
             .peers_unordered()
             .filter(|peer| {
                 matches!(
                     peer.last_connection_state,
-                    PeerAddrState::NeverAttemptedDnsSeeder
+                    PeerAddrState::NeverAttemptedSeed
                 )
             })
             .count();
@@ -423,7 +423,7 @@ impl AddressBook {
 
         AddressMetrics {
             responded,
-            never_attempted_dns_seeder,
+            never_attempted_seed,
             never_attempted_gossiped,
             never_attempted_alternate,
             failed,
@@ -443,7 +443,7 @@ impl AddressBook {
 
         // States
         // TODO: rename to address_book.[state_name]
-        metrics::gauge!("candidate_set.seeder", m.never_attempted_dns_seeder as f64);
+        metrics::gauge!("candidate_set.seed", m.never_attempted_seed as f64);
         metrics::gauge!("candidate_set.gossiped", m.never_attempted_gossiped as f64);
         metrics::gauge!(
             "candidate_set.alternate",
