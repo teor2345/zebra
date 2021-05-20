@@ -16,8 +16,8 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///     but have never connected to;
 /// 3. `NeverAttemptedAlternate` peers, which we learned from the `Version`
 ///     messages of directly connected peers, but have never connected to;
-/// 4. `NeverAttemptedDnsSeeder` peers, which we learned about from a DNS
-///     seeder, but have never connected to;
+/// 4. `NeverAttemptedSeed` peers, which we learned about from our seed config,
+///     but have never connected to;
 /// 5. `Failed` peers, to whom we attempted to connect but were unable to;
 /// 6. `AttemptPending` peers, which we've recently queued for a connection.
 ///
@@ -35,14 +35,14 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///                         │     Gossiped     │
 ///                         │    Addresses     │
 ///                         └──────────────────┘
-///                                  │      provides 
+///                                  │      provides
 ///                                  │ untrusted_last_seen
 ///                                  │
 ///                                  │
-///    ┌──────────────────┐          │          ┌──────────────────┐ 
-///    │    Handshake     │          │          │       DNS        │
-///    │    Canonical     │──────────┼──────────│      Seeder      │
-///    │    Addresses     │          │          │    Addresses     │
+///    ┌──────────────────┐          │          ┌──────────────────┐
+///    │    Handshake     │          │          │       Seed       │
+///    │    Canonical     │──────────┼──────────│    Addresses     │
+///    │    Addresses     │          │          │                  │
 ///    └──────────────────┘          │          └──────────────────┘
 ///     untrusted_last_seen          │           untrusted_last_seen
 ///         set to now               │               is unknown
@@ -59,7 +59,7 @@ use crate::{constants, types::MetaAddr, AddressBook, BoxError, Request, Response
 ///  │ ┌─────────────┐  ┌─────────────────────────┐  ┌─────────────┐ │
 ///  │ │ `Responded` │  │`NeverAttemptedGossiped` │  │  `Failed`   │ │
 ///  │ │    Peers    │  │`NeverAttemptedAlternate`│  │   Peers     │◀┼┐
-///  │ │             │  │`NeverAttemptedDnsSeeder`│  │             │ ││
+///  │ │             │  │  `NeverAttemptedSeed`   │  │             │ ││
 ///  │ │             │  │          Peers          │  │             │ ││
 ///  │ └─────────────┘  └─────────────────────────┘  └─────────────┘ ││
 ///  │        │                      │                      │        ││

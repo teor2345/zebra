@@ -748,8 +748,7 @@ pub struct MetaAddr {
     /// The exact meaning depends on `last_connection_state`:
     ///   - `Responded`: the address we used to make a direct outbound connection
     ///      to this peer
-    ///   - `NeverAttemptedDnsSeeder: an unverified address provided by a DNS
-    ///      seeder
+    ///   - `NeverAttemptedSeed: an unverified address provided by the seed config
     ///   - `NeverAttemptedGossiped`: an unverified address and services provided
     ///      by a remote peer
     ///   - `NeverAttemptedAlternate`: a directly connected peer claimed that
