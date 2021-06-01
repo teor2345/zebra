@@ -368,13 +368,12 @@ fn validate_addrs(
 /// This will consider all addresses as invalid if trying to offset their
 /// `last_seen` times to be before the limit causes an overflow.
 fn limit_last_seen_times(addrs: &mut Vec<MetaAddr>, last_seen_limit: DateTime32) {
-    let (oldest_reported_seen_timestamp, newest_reported_seen_timestamp) =
-        addrs
-            .iter()
-            .fold((u32::MAX, u32::MIN), |(oldest, newest), addr| {
-                let last_seen = addr.get_last_seen().timestamp();
-                (oldest.min(last_seen), newest.max(last_seen))
-            });
+    let timestamps: Vec<_> = addrs
+        .iter()
+        .map(|addr| addr.get_last_seen().timestamp())
+        .collect();
+    let oldest_reported_seen_timestamp = timestamps.iter().min().cloned().unwrap_or(u32::MIN);
+    let newest_reported_seen_timestamp = timestamps.iter().max().cloned().unwrap_or(u32::MAX);
 
     // If any time is in the future, adjust all times, to compensate for clock skew on honest peers
     if newest_reported_seen_timestamp > last_seen_limit.timestamp() {
