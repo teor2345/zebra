@@ -8,10 +8,9 @@ use std::{
     time::Instant,
 };
 
-use chrono::{DateTime, Utc};
 use tracing::Span;
 
-use crate::{constants, types::MetaAddr, Config, PeerAddrState};
+use crate::{meta_addr::MetaAddrChange, types::MetaAddr, Config, PeerAddrState};
 
 /// A database of peer listener addresses, their advertised services, and
 /// information on when they were last seen.
@@ -105,8 +104,8 @@ impl AddressBook {
     }
 
     /// Get the local listener address.
-    pub fn get_local_listener(&self) -> MetaAddr {
-        MetaAddr::new_local_listener(&self.local_listener)
+    pub fn get_local_listener(&self) -> MetaAddrChange {
+        MetaAddr::new_local_listener(self.local_listener)
     }
 
     /// Get the contents of `self` in random order with sanitized timestamps.
@@ -115,7 +114,7 @@ impl AddressBook {
         let _guard = self.span.enter();
         let mut peers = self
             .peers()
-            .map(|a| MetaAddr::sanitize(&a))
+            .filter_map(|a| MetaAddr::sanitize(&a))
             .collect::<Vec<_>>();
         peers.shuffle(&mut rand::thread_rng());
         peers
@@ -133,46 +132,50 @@ impl AddressBook {
         self.by_addr.get(&addr).cloned()
     }
 
-    /// Add `new` to the address book, updating the previous entry if `new` is
-    /// more recent or discarding `new` if it is stale.
+    /// Apply `change` to the address book, returning the updated `MetaAddr`,
+    /// if the change was valid.
     ///
     /// # Correctness
     ///
-    /// All new addresses should go through `update`, so that the address book
+    /// All changes should go through `update`, so that the address book
     /// only contains valid outbound addresses.
-    pub fn update(&mut self, new: MetaAddr) {
+    pub fn update(&mut self, change: MetaAddrChange) -> Option<MetaAddr> {
         let _guard = self.span.enter();
+
+        let previous = self.by_addr.get(&change.addr()).cloned();
+        let updated = change.apply(previous);
+
         trace!(
-            ?new,
+            ?change,
+            ?updated,
+            ?previous,
             total_peers = self.by_addr.len(),
             recent_peers = self.recently_live_peers().count(),
         );
 
-        // If a node that we are directly connected to has changed to a client,
-        // remove it from the address book.
-        if new.is_direct_client() && self.contains_addr(&new.addr) {
-            std::mem::drop(_guard);
-            self.take(new.addr);
-            return;
-        }
-
-        // Never add unspecified addresses or client services.
-        //
-        // Communication with these addresses can be monitored via Zebra's
-        // metrics. (The address book is for valid peer addresses.)
-        if !new.is_valid_for_outbound() {
-            return;
-        }
-
-        if let Some(prev) = self.get_by_addr(new.addr) {
-            if prev.get_last_seen() > new.get_last_seen() {
-                return;
+        if let Some(updated) = updated {
+            // If a node that we are directly connected to has changed to a client,
+            // remove it from the address book.
+            if updated.is_direct_client() && previous.is_some() {
+                std::mem::drop(_guard);
+                self.take(updated.addr);
+                return None;
             }
+
+            // Never add unspecified addresses or client services.
+            //
+            // Communication with these addresses can be monitored via Zebra's
+            // metrics. (The address book is for valid peer addresses.)
+            if !updated.is_valid_for_outbound() {
+                return None;
+            }
+
+            self.by_addr.insert(updated.addr, updated);
+            std::mem::drop(_guard);
+            self.update_metrics();
         }
 
-        self.by_addr.insert(new.addr, new);
-        std::mem::drop(_guard);
-        self.update_metrics();
+        updated
     }
 
     /// Removes the entry with `addr`, returning it if it exists
@@ -198,21 +201,6 @@ impl AddressBook {
         }
     }
 
-    /// Compute a cutoff time that can determine whether an entry
-    /// in an address book being updated with peer message timestamps
-    /// represents a likely-dead (or hung) peer, or a potentially-connected peer.
-    ///
-    /// [`constants::LIVE_PEER_DURATION`] represents the time interval in which
-    /// we should receive at least one message from a peer, or close the
-    /// connection. Therefore, if the last-seen timestamp is older than
-    /// [`constants::LIVE_PEER_DURATION`] ago, we know we should have
-    /// disconnected from it. Otherwise, we could potentially be connected to it.
-    fn liveness_cutoff_time() -> DateTime<Utc> {
-        Utc::now()
-            - chrono::Duration::from_std(constants::LIVE_PEER_DURATION)
-                .expect("unexpectedly large constant")
-    }
-
     /// Returns true if the given [`SocketAddr`] has recently sent us a message.
     pub fn recently_live_addr(&self, addr: &SocketAddr) -> bool {
         let _guard = self.span.enter();
@@ -220,8 +208,7 @@ impl AddressBook {
             None => false,
             // NeverAttempted, Failed, and AttemptPending peers should never be live
             Some(peer) => {
-                peer.last_connection_state == PeerAddrState::Responded
-                    && peer.get_last_seen().to_chrono() > AddressBook::liveness_cutoff_time()
+                peer.last_connection_state == PeerAddrState::Responded && peer.was_recently_live()
             }
         }
     }
@@ -234,12 +221,6 @@ impl AddressBook {
             None => false,
             Some(peer) => peer.last_connection_state == PeerAddrState::AttemptPending,
         }
-    }
-
-    /// Returns true if the given [`SocketAddr`] might be connected to a node
-    /// feeding timestamps into this address book.
-    pub fn maybe_connected_addr(&self, addr: &SocketAddr) -> bool {
-        self.recently_live_addr(addr) || self.pending_reconnection_addr(addr)
     }
 
     /// Return an iterator over all peers.
@@ -262,7 +243,7 @@ impl AddressBook {
         // Skip live peers, and peers pending a reconnect attempt, then sort using BTreeSet
         self.by_addr
             .values()
-            .filter(move |peer| !self.maybe_connected_addr(&peer.addr))
+            .filter(|peer| peer.is_ready_for_attempt())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .cloned()
@@ -285,7 +266,7 @@ impl AddressBook {
 
         self.by_addr
             .values()
-            .filter(move |peer| self.maybe_connected_addr(&peer.addr))
+            .filter(|peer| !peer.is_ready_for_attempt())
             .cloned()
     }
 
@@ -417,13 +398,13 @@ impl AddressBook {
     }
 }
 
-impl Extend<MetaAddr> for AddressBook {
+impl Extend<MetaAddrChange> for AddressBook {
     fn extend<T>(&mut self, iter: T)
     where
-        T: IntoIterator<Item = MetaAddr>,
+        T: IntoIterator<Item = MetaAddrChange>,
     {
-        for meta in iter.into_iter() {
-            self.update(meta);
+        for change in iter.into_iter() {
+            self.update(change);
         }
     }
 }

@@ -14,7 +14,9 @@ proptest! {
     fn sanitize_avoids_leaks(addr in MetaAddr::arbitrary()) {
         zebra_test::init();
 
-        check::sanitize_avoids_leaks(&addr, &addr.sanitize());
+        if let Some(sanitized) = addr.sanitize() {
+            check::sanitize_avoids_leaks(addr, sanitized);
+        }
     }
 
     /// Test round-trip serialization for gossiped MetaAddrs
@@ -89,8 +91,11 @@ proptest! {
         zebra_test::init();
 
         let sanitized_addr = addr.sanitize();
+        prop_assume!(sanitized_addr.is_some());
+        let sanitized_addr = sanitized_addr.unwrap();
+
         // Make sure sanitization avoids leaks on this address, to avoid spurious errors
-        check::sanitize_avoids_leaks(&addr, &sanitized_addr);
+        check::sanitize_avoids_leaks(addr, sanitized_addr);
 
         // Check that sanitization doesn't make Zebra's serialization fail
         let addr_bytes = sanitized_addr.zcash_serialize_to_vec();
@@ -122,7 +127,7 @@ proptest! {
         );
 
         // Check that serialization hasn't de-sanitized anything
-        check::sanitize_avoids_leaks(&addr, &deserialized_addr);
+        check::sanitize_avoids_leaks(addr, deserialized_addr);
 
         // Now check that the re-serialized bytes are equal
         // (`impl PartialEq for MetaAddr` might not match serialization equality)
