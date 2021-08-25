@@ -57,7 +57,7 @@ semver = "1.0.3"
 tempdir = "0.3.7"
 tokio = { version = "0.3.6", features = ["full", "test-util"] }
 
-proptest = "0.10"
+proptest = "1.0"
 proptest-derive = "0.3"
 
 zebra-test = { path = "../zebra-test" }
