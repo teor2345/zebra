@@ -4754,7 +4754,7 @@ dependencies = [
 name = "zebra-chain"
 version = "1.0.0-alpha.18"
 dependencies = [
- "aes 0.6.0",
+ "aes 0.7.5",
  "bech32",
  "bigint",
  "bitflags",
