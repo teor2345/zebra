@@ -444,6 +444,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake2b_simd"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72936ee4afc7f8f736d1c38383b56480b5497b4617b4a77bdbf1d2ababc76127"
+dependencies = [
+ "arrayref",
+ "arrayvec 0.7.1",
+ "constant_time_eq",
+]
+
+[[package]]
 name = "blake2s_simd"
 version = "0.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1354,7 +1365,7 @@ name = "equihash"
 version = "0.1.0"
 source = "git+https://github.com/ZcashFoundation/librustzcash.git?tag=0.5.1-zebra-v1.0.0-beta.4#80d5b049b8e8127671026320a1c22841035345a4"
 dependencies = [
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "byteorder",
 ]
 
@@ -1731,7 +1742,7 @@ version = "0.1.0-beta.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f186b85ed81082fb1cf59d52b0111f02915e89a4ac61d292b38d075e570f3a9"
 dependencies = [
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "ff",
  "group",
  "pasta_curves",
@@ -2682,7 +2693,7 @@ dependencies = [
  "arrayvec 0.7.1",
  "bigint",
  "bitvec",
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "ff",
  "fpe",
  "group",
@@ -2791,7 +2802,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d647d91972bad78120fd61e06b225fcda117805c9bbf17676b51bd03a251278b"
 dependencies = [
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "ff",
  "group",
  "lazy_static",
@@ -3320,7 +3331,7 @@ name = "reddsa"
 version = "0.0.0"
 source = "git+https://github.com/str4d/redjubjub.git?rev=416a6a8ebf8bd42c114c938883016c04f338de72#416a6a8ebf8bd42c114c938883016c04f338de72"
 dependencies = [
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "byteorder",
  "digest",
  "group",
@@ -3337,7 +3348,7 @@ name = "redjubjub"
 version = "0.4.0"
 source = "git+https://github.com/ZcashFoundation/redjubjub.git?rev=a32ae3fc871bc72558ac2ce7eac933d1ad5f4a9c#a32ae3fc871bc72558ac2ce7eac933d1ad5f4a9c"
 dependencies = [
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "byteorder",
  "digest",
  "jubjub",
@@ -5461,7 +5472,7 @@ version = "0.2.0"
 source = "git+https://github.com/ZcashFoundation/librustzcash.git?tag=0.5.1-zebra-v1.0.0-beta.4#80d5b049b8e8127671026320a1c22841035345a4"
 dependencies = [
  "bigint",
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "byteorder",
 ]
 
@@ -5470,7 +5481,7 @@ name = "zcash_note_encryption"
 version = "0.0.0"
 source = "git+https://github.com/ZcashFoundation/librustzcash.git?tag=0.5.1-zebra-v1.0.0-beta.4#80d5b049b8e8127671026320a1c22841035345a4"
 dependencies = [
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "byteorder",
  "chacha20",
  "chacha20poly1305",
@@ -5488,7 +5499,7 @@ dependencies = [
  "aes",
  "bip0039",
  "bitvec",
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "blake2s_simd",
  "bls12_381",
  "byteorder",
@@ -5520,7 +5531,7 @@ version = "0.5.0"
 source = "git+https://github.com/ZcashFoundation/librustzcash.git?tag=0.5.1-zebra-v1.0.0-beta.4#80d5b049b8e8127671026320a1c22841035345a4"
 dependencies = [
  "bellman",
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "bls12_381",
  "byteorder",
  "directories",
@@ -5539,7 +5550,7 @@ version = "0.1.6-alpha.0"
 source = "git+https://github.com/ZcashFoundation/zcash_script.git?rev=270d32d192c5880f911acf21ef100caa128e6179#270d32d192c5880f911acf21ef100caa128e6179"
 dependencies = [
  "bindgen",
- "blake2b_simd",
+ "blake2b_simd 0.5.11",
  "cc",
  "halo2",
  "incrementalmerkletree",
@@ -5561,7 +5572,7 @@ dependencies = [
  "bigint",
  "bitflags",
  "bitvec",
- "blake2b_simd",
+ "blake2b_simd 1.0.0",
  "blake2s_simd",
  "bls12_381",
  "bs58",
@@ -5616,7 +5627,7 @@ name = "zebra-consensus"
 version = "1.0.0-beta.5"
 dependencies = [
  "bellman",
- "blake2b_simd",
+ "blake2b_simd 1.0.0",
  "bls12_381",
  "chrono",
  "color-eyre",
