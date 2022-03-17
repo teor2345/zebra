@@ -34,7 +34,7 @@ pin-project = "1.0.10"
 color-eyre = { version = "0.5.11", features = ["issue-url"] }
 thiserror = "1.0.30"
 
-tracing-flame = "0.1.0"
+tracing-flame = "0.2.0"
 tracing-journald = "0.1.0"
 tracing-subscriber = { version = "0.2.25", features = ["tracing-log"] }
 tracing-error = "0.1.2"

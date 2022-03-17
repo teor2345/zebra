@@ -4951,13 +4951,13 @@ dependencies = [
 
 [[package]]
 name = "tracing-flame"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd520fe41c667b437952383f3a1ec14f1fa45d653f719a77eedd6e6a02d8fa54"
+checksum = "0bae117ee14789185e129aaee5d93750abe67fdc5a9a62650452bfe4e122a3a9"
 dependencies = [
  "lazy_static",
  "tracing",
- "tracing-subscriber 0.2.25",
+ "tracing-subscriber 0.3.9",
 ]
 
 [[package]]
@@ -5047,6 +5047,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e0ab7bdc962035a87fba73f3acca9b8a8d0034c2e6f60b84aeaaddddc155dce"
 dependencies = [
  "sharded-slab",
+ "smallvec 1.8.0",
  "thread_local",
  "tracing-core",
 ]
