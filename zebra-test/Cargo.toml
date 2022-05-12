@@ -26,7 +26,7 @@ owo-colors = "3.4.0"
 spandoc = "0.2.2"
 thiserror = "1.0.31"
 tracing-subscriber = "0.2.25"
-tracing-error = "0.1.2"
+tracing-error = "0.2.0"
 tracing = "0.1.31"
 
 [dev-dependencies]

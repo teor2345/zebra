@@ -55,7 +55,7 @@ thiserror = "1.0.31"
 tracing-flame = "0.1.0"
 tracing-journald = "0.1.0"
 tracing-subscriber = { version = "0.2.25", features = ["tracing-log"] }
-tracing-error = "0.1.2"
+tracing-error = "0.2.0"
 metrics = "0.17.1"
 metrics-exporter-prometheus = "0.7.0"
 tracing-futures = "0.2.5"
