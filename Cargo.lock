@@ -2652,6 +2652,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "metrics"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "142c53885123b68d94108295a09d4afe1a1388ed95b54d5dacd9a454753030f2"
+dependencies = [
+ "ahash",
+ "metrics-macros",
+]
+
+[[package]]
 name = "metrics-exporter-prometheus"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2660,7 +2670,7 @@ dependencies = [
  "hyper",
  "indexmap",
  "ipnet",
- "metrics",
+ "metrics 0.18.1",
  "metrics-util",
  "parking_lot 0.11.2",
  "quanta",
@@ -2689,7 +2699,7 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "hashbrown 0.11.2",
- "metrics",
+ "metrics 0.18.1",
  "num_cpus",
  "parking_lot 0.11.2",
  "quanta",
@@ -6362,7 +6372,7 @@ dependencies = [
  "hex",
  "jubjub",
  "lazy_static",
- "metrics",
+ "metrics 0.19.0",
  "once_cell",
  "orchard 0.2.0",
  "proptest",
@@ -6402,7 +6412,7 @@ dependencies = [
  "humantime-serde",
  "indexmap",
  "lazy_static",
- "metrics",
+ "metrics 0.19.0",
  "ordered-map",
  "pin-project 1.0.11",
  "proptest",
@@ -6490,7 +6500,7 @@ dependencies = [
  "itertools",
  "jubjub",
  "lazy_static",
- "metrics",
+ "metrics 0.19.0",
  "mset",
  "once_cell",
  "proptest",
@@ -6569,7 +6579,7 @@ dependencies = [
  "inferno",
  "lazy_static",
  "log",
- "metrics",
+ "metrics 0.19.0",
  "metrics-exporter-prometheus",
  "num-integer",
  "once_cell",
