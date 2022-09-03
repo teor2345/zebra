@@ -431,7 +431,7 @@ dependencies = [
  "hmac",
  "pbkdf2",
  "rand 0.8.5",
- "sha2",
+ "sha2 0.9.9",
  "unicode-normalization",
  "zeroize",
 ]
@@ -594,7 +594,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "771fe0050b883fcc3ea2359b1a96bcfbc090b7116eae7c3c512c7a083fdf23d3"
 dependencies = [
- "sha2",
+ "sha2 0.9.9",
 ]
 
 [[package]]
@@ -1398,7 +1398,7 @@ dependencies = [
  "merlin",
  "rand 0.7.3",
  "serde",
- "sha2",
+ "sha2 0.9.9",
  "zeroize",
 ]
 
@@ -1412,7 +1412,7 @@ dependencies = [
  "hex",
  "rand_core 0.6.3",
  "serde",
- "sha2",
+ "sha2 0.9.9",
  "thiserror",
  "zeroize",
 ]
@@ -4473,6 +4473,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf9db03534dff993187064c4e0c05a5708d2a9728ace9a8959b77bedf415dac5"
+dependencies = [
+ "cfg-if 1.0.0",
+ "cpufeatures",
+ "digest 0.10.3",
+]
+
+[[package]]
 name = "sha3"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5289,7 +5300,7 @@ dependencies = [
  "rsa",
  "serde",
  "sha-1 0.9.8",
- "sha2",
+ "sha2 0.9.9",
  "sha3",
  "signature",
  "simple_asn1",
@@ -6191,7 +6202,7 @@ dependencies = [
  "rand_core 0.6.3",
  "ripemd",
  "secp256k1",
- "sha2",
+ "sha2 0.9.9",
  "subtle",
  "zcash_encoding 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "zcash_note_encryption 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -6228,7 +6239,7 @@ dependencies = [
  "rand_core 0.6.3",
  "ripemd",
  "secp256k1",
- "sha2",
+ "sha2 0.9.9",
  "subtle",
  "zcash_encoding 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "zcash_note_encryption 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -6260,7 +6271,7 @@ dependencies = [
  "orchard 0.2.0",
  "rand 0.8.5",
  "rand_core 0.6.3",
- "sha2",
+ "sha2 0.9.9",
  "subtle",
  "zcash_encoding 0.1.0 (git+https://github.com/ZcashFoundation/librustzcash.git?rev=4567a37ceccbd506a58aaaded39ba14c952c1510)",
  "zcash_note_encryption 0.1.0 (git+https://github.com/ZcashFoundation/librustzcash.git?rev=4567a37ceccbd506a58aaaded39ba14c952c1510)",
@@ -6347,7 +6358,7 @@ dependencies = [
  "serde",
  "serde-big-array",
  "serde_with",
- "sha2",
+ "sha2 0.10.5",
  "spandoc",
  "static_assertions",
  "subtle",
