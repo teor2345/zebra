@@ -43,7 +43,7 @@ chrono = { version = "0.4.31", default-features = false, features = ["clock", "s
 futures = "0.3.29"
 
 # lightwalletd sends JSON-RPC requests over HTTP 1.1
-hyper = { version = "0.14.27", features = ["http1", "server"] }
+hyper = { version = "1.1.0", features = ["http1", "server"] }
 
 jsonrpc-core = "18.0.0"
 jsonrpc-derive = "18.0.0"
@@ -54,13 +54,13 @@ num_cpus = "1.16.0"
 serde_json = { version = "1.0.108", features = ["preserve_order"] }
 indexmap = { version = "2.0.1", features = ["serde"] }
 
-tokio = { version = "1.34.0", features = ["time", "rt-multi-thread", "macros", "tracing"] }
+tokio = { version = "1.35.0", features = ["time", "rt-multi-thread", "macros", "tracing"] }
 tower = "0.4.13"
 
 tracing = "0.1.39"
 
 hex = { version = "0.4.3", features = ["serde"] }
-serde = { version = "1.0.192", features = ["serde_derive"] }
+serde = { version = "1.0.193", features = ["serde_derive"] }
 
 # Experimental feature getblocktemplate-rpcs
 rand = { version = "0.8.5", optional = true }
@@ -82,8 +82,8 @@ insta = { version = "1.33.0", features = ["redactions", "json", "ron"] }
 
 proptest = "1.4.0"
 
-thiserror = "1.0.48"
-tokio = { version = "1.34.0", features = ["full", "tracing", "test-util"] }
+thiserror = "1.0.51"
+tokio = { version = "1.35.0", features = ["full", "tracing", "test-util"] }
 
 zebra-chain = { path = "../zebra-chain", features = ["proptest-impl"] }
 zebra-consensus = { path = "../zebra-consensus", features = ["proptest-impl"] }
